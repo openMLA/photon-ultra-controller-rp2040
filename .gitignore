@@ -1,3 +1,7 @@
+# Other
+scrapbook/*
+src/*/*
+*.h
 
 # FreeCAD
 *.FCstd1
