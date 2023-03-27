@@ -26,7 +26,8 @@
 // Each gets the name <pio_filename.pio.h>
 #include "hsync.pio.h"
 #include "vsync.pio.h"
-#include "rgb.pio.h"
+#include "pxl.pio.h"
+#include "pxl_clk.pio.h"
 
 
 // VGA timing constants

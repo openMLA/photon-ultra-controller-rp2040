@@ -1,7 +1,7 @@
 # Other
 scrapbook/*
-src/*/*
-*.h
+src/build/*
+!src/build/*.uf2
 
 # FreeCAD
 *.FCstd1
