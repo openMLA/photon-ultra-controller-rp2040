@@ -13,7 +13,7 @@
  *  - RP2040 GND ---> VGA GND
  *
  * RESOURCES USED
- *  - PIO state machines 0, 1, and 2 on PIO instance 0
+ *  - PIO state machines 0, 1, 2 and 3 on PIO instance 0
  *  - DMA channels 0 and 1
  *  - 153.6 kBytes of RAM (for pixel color data)
  *
@@ -46,11 +46,15 @@ unsigned char vga_data_array[TXCOUNT];
 char * address_pointer = &vga_data_array[0] ;
 
 // Give the I/O pins that we're using some names that make sense
-#define HSYNC     13
-#define VSYNC     11
-#define RED_PIN   18
-#define GREEN_PIN 19
-#define BLUE_PIN  20
+#define DATAEN_CMD   18
+#define HSYNC     19
+#define VSYNC     17
+#define PXL_CLK   16
+#define BASE_PXL_PIN   12  // first pin (of 8) contiguous pixel bits
+
+#define RED_PIN   20
+#define GREEN_PIN 21
+#define BLUE_PIN  22
 
 // We can only produce 8 colors, so let's give them readable names
 #define BLACK   0
@@ -135,12 +139,14 @@ int main() {
     // and is of the form <program name_program>
     uint hsync_offset = pio_add_program(pio, &hsync_program);
     uint vsync_offset = pio_add_program(pio, &vsync_program);
-    uint rgb_offset = pio_add_program(pio, &rgb_program);
+    uint pxl_offset = pio_add_program(pio, &pxl_program);
+    uint clk_offset = pio_add_program(pio, &pxl_clk_program);
 
     // Manually select a few state machines from pio instance pio0.
     uint hsync_sm = 0;
     uint vsync_sm = 1;
-    uint rgb_sm = 2;
+    uint pxl_sm = 2;
+    uint clk_sm = 3;
 
     // Call the initialization functions that are defined within each PIO file.
     // Why not create these programs here? By putting the initialization function in
@@ -148,7 +154,8 @@ int main() {
     // is consolidated in one place. Here in the C, we then just import and use it.
     hsync_program_init(pio, hsync_sm, hsync_offset, HSYNC);
     vsync_program_init(pio, vsync_sm, vsync_offset, VSYNC);
-    rgb_program_init(pio, rgb_sm, rgb_offset, RED_PIN);
+    pxl_program_init(pio, pxl_sm, pxl_offset, RED_PIN, DATAEN_CMD);
+    pxl_clk_program_init(pio, clk_sm, clk_offset, PXL_CLK);
 
 
     /////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -170,7 +177,7 @@ int main() {
     dma_channel_configure(
         rgb_chan_0,                 // Channel to be configured
         &c0,                        // The configuration we just created
-        &pio->txf[rgb_sm],          // write address (RGB PIO TX FIFO)
+        &pio->txf[pxl_sm],          // write address (RGB PIO TX FIFO)
         &vga_data_array,            // The initial read address (pixel color array)
         TXCOUNT,                    // Number of transfers; in this case each is 1 byte.
         false                       // Don't start immediately.
@@ -200,14 +207,15 @@ int main() {
     // in the assembly. Each uses these values to initialize some counting registers.
     pio_sm_put_blocking(pio, hsync_sm, H_ACTIVE);
     pio_sm_put_blocking(pio, vsync_sm, V_ACTIVE);
-    pio_sm_put_blocking(pio, rgb_sm, RGB_ACTIVE);
+    pio_sm_put_blocking(pio, pxl_sm, RGB_ACTIVE);
+    pio_sm_put_blocking(pio, clk_sm, RGB_ACTIVE);
 
 
     // Start the two pio machine IN SYNC
     // Note that the RGB state machine is running at full speed,
     // so synchronization doesn't matter for that one. But, we'll
     // start them all simultaneously anyway.
-    pio_enable_sm_mask_in_sync(pio, ((1u << hsync_sm) | (1u << vsync_sm) | (1u << rgb_sm)));
+    pio_enable_sm_mask_in_sync(pio, ((1u << hsync_sm) | (1u << vsync_sm) | (1u << pxl_sm) | (1u << clk_sm)));
 
     // Start DMA channel 0. Once started, the contents of the pixel color array
     // will be continously DMA's to the PIO machines that are driving the screen.

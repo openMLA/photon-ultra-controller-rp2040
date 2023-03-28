@@ -5,54 +5,29 @@
 ; FILE IS JUST A PLACEHOLDER
 
 ; Program name
-.program rgb
-.side_set 1 opt  
-; we use side_set for the DATAEN_CMD
+.program pxl_clk
 
-pull block 					; Pull from FIFO to OSR (only once)
-mov y, osr 					; Copy value from OSR to y scratch register
+; a square wave with 1/4 base clock frequency so 133/4 ~= 33MHz (32nm period)
 .wrap_target
-
-set pins, 0 				; Zero RGB pins in blanking
-mov x, y 					; Initialize counter variable
-
-wait 1 irq 1 side 1 [3] 			; Wait for vsync active mode 
-
-pxlout:
-	pull block				; Pull color value
-	out pins, 3	[4]			; Push out to pins (first pixel)
-	out pins, 3	[2]			; Push out to pins (next pixel)
-	jmp x-- pxlout		; Stay here thru horizontal active mode
-
-nop side 0
+	set pins, 1	 [1]		; set pin high (2 clock cycles)
+	set pins, 0	 [1]		; set pin low  (2 clock cycles)
 .wrap
 
 
 % c-sdk {
-static inline void rgb_program_init(PIO pio, uint sm, uint offset, uint pin) {
+static inline void pxl_clk_program_init(PIO pio, uint sm, uint offset, uint pin) {
     // creates state machine configuration object c, sets
     // to default configurations.
-    pio_sm_config c = rgb_program_get_default_config(offset);
+    pio_sm_config c = pxl_clk_program_get_default_config(offset);
 
-    // Map the state machine's SET and OUT pin group to three pins, the `pin`
-    // parameter to this function is the lowest one. These groups overlap.
-    sm_config_set_set_pins(&c, pin, 3);
-    sm_config_set_out_pins(&c, pin, 3);
-
-    //sideset pin (for DATAEM_CMD functionality)
-    sm_config_set_sideset_pins(&c, 12);
+    // set the target pin as a set pin
+    sm_config_set_set_pins(&c, pin, 1);
 
     // Set this pin's GPIO function (connect PIO to the pad)
     pio_gpio_init(pio, pin);
-    pio_gpio_init(pio, pin+1);
-    pio_gpio_init(pio, pin+2);
-    pio_gpio_init(pio, 12);
     
-    // Set the pin direction to output at the PIO (1 sideset + 8 pins for pixel)
-    // for reasons not quite clear to me we need to explicity set the pins as output again.
-    // Since the pins are not contiguous we just increase the nubmer of pins
-    // with sideset pin=GPIO12 and P0-P7 being GPIO17:GPIO22+GPIO26+GPIO27
-    pio_sm_set_consecutive_pindirs(pio, sm, 12, 10, true); 
+    // Set the pin direction to output at the PIO 
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, true); 
 
     // Load our configuration, and jump to the start of the program
     pio_sm_init(pio, sm, offset, &c);

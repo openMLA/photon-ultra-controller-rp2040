@@ -4,8 +4,7 @@
 
 ; Program name
 .program vsync
-.side_set 1 opt   
-; side_set is the same pin as the 'pins' in this case
+.side_set 1 opt
 
 ; frontporch: 1  lines
 ; sync pulse: 2   lines
@@ -22,21 +21,21 @@ pull block                        ; Pull from FIFO to OSR (only once)
 ; ACTIVE duration:720 line (grayscale data can be put onto pins)
 mov x, osr                        ; Copy value from OSR to x scratch register
 activefront:
-    wait 1 irq 0                  ; Wait for hsync to go high
-    irq set 1                     ; Set IRQ channel 1 high to signal that we're in active mode
+    wait 1 irq 0                  ; Wait for pre-DATAEN_CMD to go high
+    irq set 1                     ; Set IRQ channel 1 high to signal DATAEM_CMD is high
     jmp x-- activefront           ; Remain in active mode, decrementing counter
 
 ; FRONTPORCH  duration:1 line 
-wait 1 irq 0      
-
+wait 1 irq 0     
+wait 1 irq 0
 
 ; SYNC PULSE  duration:2 line 
 wait 1 irq 0 side 1               ; Wait for one line
 wait 1 irq 0                      ; Wait for a second line
 
 ; BACKPORCH   duration:1 line 
-wait 1 irq 0   side 0             ; side 0 will set sideset pin 1 low; which here is same as 'pins'
-
+wait 1 irq 0  side 0            ; side 0 will set sideset pin 1 low; which here is same as 'pins'
+wait 1 irq 0  
 .wrap                             ; Program wraps from here
 
 
@@ -60,7 +59,6 @@ static inline void vsync_program_init(PIO pio, uint sm, uint offset, uint pin) {
 
     // Set this pin's GPIO function (connect PIO to the pad)
     pio_gpio_init(pio, pin);
-    // pio_gpio_init(pio, pin+1);
     
     // Set the pin direction to output at the PIO
     pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, true);

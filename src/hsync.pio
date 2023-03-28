@@ -33,9 +33,8 @@ activeporch:
    jmp x-- activeporch  ; Remain high in active mode and front porch
 
 ; FRONTPORCH  duration:9 PLCK
-nop [6]    ; Sync Low for back porch (8 cycles) - 9th PLCK in next line
-irq set 0      ; Set IRQ channel 0 to high to signal start of pulse(1 cycle)
-nop
+nop [8]     ; Set IRQ channel 0 to high to signal start of pulse(1 cycle)
+                  ; this is the post-DATAEN_CMD high interrupt -> used in vsync.pio
 
 ; SYNC PULSE  duration:9 PLCK
 pulse:
@@ -43,8 +42,9 @@ pulse:
 
 ; BACKPORCH  duration:9 PLCK
 backporch:
-    set pins, 0 [8]    ; Sync Low for back porch (8 cycles) - 9th PLCK in next line
-    
+    set pins, 0 [7]  ; Sync Low for back porch (8 cycles) - 9th PLCK in next line
+    irq set 0        ; Set IRQ channel 0 to high to signal start of pulse(1 cycle)
+                     ; this is the pre-DATAEN_CMD high interrupt -> used in vsync.pio    
 .wrap
 
 
