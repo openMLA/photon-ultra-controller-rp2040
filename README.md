@@ -15,6 +15,8 @@ If you are interested in learning more about the Photon Ultra, you can find more
 
 The PCB uses a Raspberry Pi Pico board as the central controller. The PIO blocks of the RP2040 generate the timing signals for the DLPC1438 chip on the DLP controller board.
 
+![](media/PCB_preview.JPG)
+
 ### Code
 
 The PIO implementation was heavily inspired by the nice [writeup by Hunter Adams](https://vanhunteradams.com/Pico/VGA/VGA.html#Code-organization).
