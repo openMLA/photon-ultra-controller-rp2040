@@ -1,21 +1,21 @@
 /**
- * Hunter Adams (vha3@cornell.edu)
+ * Nemo Andrea (nemoandrea@outlook.com)
+ * Based on demo code by  Hunter Adams (vha3@cornell.edu)
  * 
- * Mandelbrot set calculation and visualization
- * Uses PIO-assembly VGA driver
+ * Texas Instruments DLPC1438 video signal generator
+ * Uses PIO-assembly of RP2040
  *
  * HARDWARE CONNECTIONS
- *  - GPIO 16 ---> VGA Hsync
- *  - GPIO 17 ---> VGA Vsync
- *  - GPIO 18 ---> 330 ohm resistor ---> VGA Red
- *  - GPIO 19 ---> 330 ohm resistor ---> VGA Green
- *  - GPIO 20 ---> 330 ohm resistor ---> VGA Blue
- *  - RP2040 GND ---> VGA GND
+ *  - GPIO 19 ---> Hsync
+ *  - GPIO 18 ---> DATAEN_CMD (data valid) 
+ *  - GPIO 17 ---> Vsync
+ *  - GPIO 16 ---> PCLK (pixel clock)
+ *  - GPIO 8:15 ---> Pdata[0:8] (pixel data 8bit grayscale)
  *
  * RESOURCES USED
  *  - PIO state machines 0, 1, 2 and 3 on PIO instance 0
  *  - DMA channels 0 and 1
- *  - 153.6 kBytes of RAM (for pixel color data)
+ *  - 230.4 kBytes of RAM (for pixel color data)
  *
  */
 #include <stdio.h>
@@ -31,93 +31,55 @@
 
 
 // VGA timing constants
-#define H_ACTIVE   655    // (active + frontporch - 1) - one cycle delay for mov
-#define V_ACTIVE   479    // (active - 1)
-#define RGB_ACTIVE 319    // (horizontal active)/2 - 1
-// #define RGB_ACTIVE 639 // change to this if 1 pixel/byte
+#define H_ACTIVE   1300    // (active + frontporch - 1) - one cycle delay for mov //TODO Tune
+#define V_ACTIVE   720    // (active - 1) //TODO Tune
+#define DATAEM_CMD_ACTIVE 320    // horizontal_pixels/pixels_per_byte = 1280/4 = 320
+
 
 // Length of the pixel array, and number of DMA transfers
-#define TXCOUNT 153600 // Total pixels/2 (since we have 2 pixels per byte)
+#define TXCOUNT 230400 // Total number of chars/8bit numbers we need. (for DLP300/301 in normal mode)
+                       // We run 1280x720 pixels and 2 bits per pixel so we need 1280*720*(2/8) 
 
-// Pixel color array that is DMA's to the PIO machines and
+// Pixel grayscale array that is DMA's to the PIO machines and
 // a pointer to the ADDRESS of this color array.
 // Note that this array is automatically initialized to all 0's (black)
-unsigned char vga_data_array[TXCOUNT];
-char * address_pointer = &vga_data_array[0] ;
+unsigned char DLP_data_array[TXCOUNT];
+char * address_pointer = &DLP_data_array[0] ;
 
 // Give the I/O pins that we're using some names that make sense
+// the pins match the layout in the PCB and the pico board pinout
 #define DATAEN_CMD   18
 #define HSYNC     19
 #define VSYNC     17
 #define PXL_CLK   16
-#define BASE_PXL_PIN   12  // first pin (of 8) contiguous pixel bits
+#define BASE_PXL_PIN   8  // first pin (of 8) contiguous pixel bits
 
-#define RED_PIN   20
-#define GREEN_PIN 21
-#define BLUE_PIN  22
-
-// We can only produce 8 colors, so let's give them readable names
-#define BLACK   0
-#define RED     1
-#define GREEN   2
-#define YELLOW  3
-#define BLUE    4
-#define MAGENTA 5
-#define CYAN    6
-#define WHITE   7
-
-
-// A function for drawing a pixel with a specified color.
+// A function for drawing a pixel with a specified grayscale value.
 // Note that because information is passed to the PIO state machines through
 // a DMA channel, we only need to modify the contents of the array and the
 // pixels will be automatically updated on the screen.
-void drawPixel(int x, int y, char color) {
-    // Range checks
-    if (x > 639) x = 639 ;
-    if (x < 0) x = 0 ;
-    if (y < 0) y = 0 ;
-    if (y > 479) y = 479 ;
 
-    // Which pixel is it?
+// NOTE: for now we constrain brightness to be {0,1,2,3} (2 bits only)
+void drawPixel(int x, int y, uint8_t brightness) {
+    // Which array index is it?
     int pixel = ((640 * y) + x) ;
 
-    // Is this pixel stored in the first 3 bits
-    // of the vga data array index, or the second
-    // 3 bits? Check, then mask.
-    if (pixel & 1) {
-        vga_data_array[pixel>>1] |= (color << 3) ;
-    }
-    else {
-        vga_data_array[pixel>>1] |= (color) ;
+    switch (pixel % 4)
+    {
+        case 0:
+            DLP_data_array[pixel>>1] |= brightness << 6 ;
+            break;
+        case 1:
+            DLP_data_array[pixel>>1] |= brightness << 4;
+                break;
+        case 2:
+            DLP_data_array[pixel>>1] |= brightness << 2;
+                break;
+        default:
+            DLP_data_array[pixel>>1] |= brightness;
+                break;
     }
 }
-////////////////////////////////////////////////////////////////////////////////////////////////////
-/////////////// Stuff for Mandelbrot ///////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////////////////
-// Fixed point data type
-typedef signed int fix28 ;
-#define multfix28(a,b) ((fix28)(((( signed long long)(a))*(( signed long long)(b)))>>28)) 
-#define float2fix28(a) ((fix28)((a)*268435456.0f)) // 2^28
-#define fix2float28(a) ((float)(a)/268435456.0f) 
-#define int2fix28(a) ((a)<<28)
-// the fixed point value 4
-#define FOURfix28 0x40000000 
-#define SIXTEENTHfix28 0x01000000
-#define ONEfix28 0x10000000
-
-// Maximum number of iterations
-#define max_count 1000
-
-// Mandelbrot values
-fix28 Zre, Zim, Cre, Cim ;
-fix28 Zre_sq, Zim_sq ;
-
-int i, j, count, total_count ;
-
-fix28 x[640] ;
-fix28 y[480] ;
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
 
 int main() {
 
@@ -154,7 +116,7 @@ int main() {
     // is consolidated in one place. Here in the C, we then just import and use it.
     hsync_program_init(pio, hsync_sm, hsync_offset, HSYNC);
     vsync_program_init(pio, vsync_sm, vsync_offset, VSYNC);
-    pxl_program_init(pio, pxl_sm, pxl_offset, RED_PIN, DATAEN_CMD);
+    pxl_program_init(pio, pxl_sm, pxl_offset, BASE_PXL_PIN, DATAEN_CMD);
     pxl_clk_program_init(pio, clk_sm, clk_offset, PXL_CLK);
 
 
@@ -163,37 +125,37 @@ int main() {
     /////////////////////////////////////////////////////////////////////////////////////////////////////
 
     // DMA channels - 0 sends color data, 1 reconfigures and restarts 0
-    int rgb_chan_0 = 0;
-    int rgb_chan_1 = 1;
+    int pxl_chan_0 = 0;
+    int pxl_chan_1 = 1;
 
     // Channel Zero (sends color data to PIO VGA machine)
-    dma_channel_config c0 = dma_channel_get_default_config(rgb_chan_0);  // default configs
+    dma_channel_config c0 = dma_channel_get_default_config(pxl_chan_0);  // default configs
     channel_config_set_transfer_data_size(&c0, DMA_SIZE_8);              // 8-bit txfers
     channel_config_set_read_increment(&c0, true);                        // yes read incrementing
     channel_config_set_write_increment(&c0, false);                      // no write incrementing
     channel_config_set_dreq(&c0, DREQ_PIO0_TX2) ;                        // DREQ_PIO0_TX2 pacing (FIFO)
-    channel_config_set_chain_to(&c0, rgb_chan_1);                        // chain to other channel
+    channel_config_set_chain_to(&c0, pxl_chan_1);                        // chain to other channel
 
     dma_channel_configure(
-        rgb_chan_0,                 // Channel to be configured
+        pxl_chan_0,                 // Channel to be configured
         &c0,                        // The configuration we just created
         &pio->txf[pxl_sm],          // write address (RGB PIO TX FIFO)
-        &vga_data_array,            // The initial read address (pixel color array)
+        &DLP_data_array,            // The initial read address (pixel color array)
         TXCOUNT,                    // Number of transfers; in this case each is 1 byte.
         false                       // Don't start immediately.
     );
 
     // Channel One (reconfigures the first channel)
-    dma_channel_config c1 = dma_channel_get_default_config(rgb_chan_1);   // default configs
+    dma_channel_config c1 = dma_channel_get_default_config(pxl_chan_1);   // default configs
     channel_config_set_transfer_data_size(&c1, DMA_SIZE_32);              // 32-bit txfers
     channel_config_set_read_increment(&c1, false);                        // no read incrementing
     channel_config_set_write_increment(&c1, false);                       // no write incrementing
-    channel_config_set_chain_to(&c1, rgb_chan_0);                         // chain to other channel
+    channel_config_set_chain_to(&c1, pxl_chan_0);                         // chain to other channel
 
     dma_channel_configure(
-        rgb_chan_1,                         // Channel to be configured
+        pxl_chan_1,                         // Channel to be configured
         &c1,                                // The configuration we just created
-        &dma_hw->ch[rgb_chan_0].read_addr,  // Write address (channel 0 read address)
+        &dma_hw->ch[pxl_chan_0].read_addr,  // Write address (channel 0 read address)
         &address_pointer,                   // Read address (POINTER TO AN ADDRESS)
         1,                                  // Number of transfers, in this case each is 4 byte
         false                               // Don't start immediately.
@@ -207,8 +169,8 @@ int main() {
     // in the assembly. Each uses these values to initialize some counting registers.
     pio_sm_put_blocking(pio, hsync_sm, H_ACTIVE);
     pio_sm_put_blocking(pio, vsync_sm, V_ACTIVE);
-    pio_sm_put_blocking(pio, pxl_sm, RGB_ACTIVE);
-    pio_sm_put_blocking(pio, clk_sm, RGB_ACTIVE);
+    pio_sm_put_blocking(pio, pxl_sm, DATAEM_CMD_ACTIVE);
+    pio_sm_put_blocking(pio, clk_sm, DATAEM_CMD_ACTIVE);
 
 
     // Start the two pio machine IN SYNC
@@ -221,80 +183,56 @@ int main() {
     // will be continously DMA's to the PIO machines that are driving the screen.
     // To change the contents of the screen, we need only change the contents
     // of that array.
-    dma_start_channel_mask((1u << rgb_chan_0)) ;
+    dma_start_channel_mask((1u << pxl_chan_0)) ;
 
 
     /////////////////////////////////////////////////////////////////////////////////////////////////////
-    // ===================================== Mandelbrot =================================================
+    // ===================================== DEMO SCREENS =================================================
     /////////////////////////////////////////////////////////////////////////////////////////////////////
-    uint64_t begin_time ;
-    uint64_t end_time ;
-    while (true) {
+    
+    // simple checkerboard-like pattenr with grayscale blocks. 
+    // due to memory constraints we only use 2 bits for each pixel
 
-        // x values
-        for (i=0; i<640; i++) {
-            x[i] = float2fix28(-2.0f + 3.0f * (float)i/640.0f) ;
-        }
-        
-        // y values
-        for (j=0; j<480; j++) {
-            y[j] = float2fix28( 1.0f - 2.0f * (float)j/480.0f) ;
-        }
+    uint64_t begin_time; 
+    uint64_t curr_time; 
+    uint64_t frametime = 1000000;  // time between frame transitions (in us) 
+    uint32_t framenum = 0;
 
-        total_count = 0 ;
-        fix28 center = float2fix28(-0.25f);
-        fix28 radius2 = float2fix28(0.25f);
+    begin_time = time_us_64() ;
 
-        begin_time = time_us_64() ;
+    // grayscale block size
+    int xsize = 160;
+    int ysize = 80;
+    int xprog = 0;  // just a counter
+    int yprog = 0;  // just a counter
 
-        for (i=0; i<640; i++) {
-            
-            for (j=0; j<480; j++) {
 
-                Zre = Zre_sq = Zim = Zim_sq = 0 ;
+    while (true) {     
+        int x = 0 ; 
+        int y = 0 ; 
 
-                Cre = x[i] ;
-                Cim = y[j] ;
-
-                // detect secondary bulb
-                // if ((multfix28(Cre+ONEfix28,Cre+ONEfix28)+multfix28(Cim,Cim))<SIXTEENTHfix28) {
-                //     count=max_count;
-                // }
-                // // detect big circle
-                // else if ((multfix28(Cre-center,Cre-center)+multfix28(Cim,Cim))<radius2) {
-                //     count=max_count;
-                // }
-                // // otherwise get ready to iterate
-                // else count = 0;
-                count = 0 ;
-
-                // Mandelbrot iteration
-                while (count++ < max_count) {
-                    Zim = (multfix28(Zre, Zim)<<1) + Cim ;
-                    Zre = Zre_sq - Zim_sq + Cre ;
-                    Zre_sq = multfix28(Zre, Zre) ;
-                    Zim_sq = multfix28(Zim, Zim) ;
-
-                    if ((Zre_sq + Zim_sq) >= FOURfix28) break ;
-                }
-                // Increment total count
-                total_count += count ;
-
-                // Draw the pixel
-                if (count >= max_count) drawPixel(i, j, BLACK) ;
-                else if (count >= (max_count>>1)) drawPixel(i, j, WHITE) ;
-                else if (count >= (max_count>>2)) drawPixel(i, j, CYAN) ;
-                else if (count >= (max_count>>3)) drawPixel(i, j, BLUE) ;
-                else if (count >= (max_count>>4)) drawPixel(i, j, RED) ;
-                else if (count >= (max_count>>5)) drawPixel(i, j, YELLOW) ;
-                else if (count >= (max_count>>6)) drawPixel(i, j, MAGENTA) ;
-                else drawPixel(i, j, RED) ;
-
+        for (x=0; x<1280; x++) {   
+            if (xprog == xsize) {
+                framenum = (framenum + 1) % 4;  // new grayscale value for block
+                xprog=0;
+            } 
+            xprog++;
+            for (y=0; y<720; y++) {         
+                if (yprog == ysize) {
+                    framenum = (framenum + 1) % 4;  // new grayscale value for block
+                    yprog=0;
+                } 
+                yprog++;
+                drawPixel(x, y, framenum) ;  // actually pack the pixel into DLP_data_array
             }
         }
 
-        end_time = time_us_64() ;
-        printf("Total time: %3.6f seconds \n", (float)(end_time - begin_time)*(1./1000000.)) ;
-        printf("Total iterations: %d", total_count) ;
+        // every frametime we shift the pattern by one grayscale value.
+        // possible demonstration of framerate or something
+        // curr_time = time_us_64();
+        // if  (curr_time - begin_time > frametime) {
+        //     framenum = (framenum+1) % 4; 
+        //     begin_time = curr_time;
+        // }
     }
 }

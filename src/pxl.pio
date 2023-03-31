@@ -11,16 +11,18 @@ pull block 					; Pull from FIFO to OSR (only once)
 mov y, osr 					; Copy value from OSR to y scratch register
 .wrap_target
 
-set pins, 0 				; Zero RGB pins in blanking
+set pins, 0 				; Zero grayscale pins in blanking
 mov x, y 					; Initialize counter variable
 
 wait 1 irq 1  			; Wait for DATAEM_CMD interrupt
 pxlout:
 	pull block side 1		; Pull color value and set DATAEM_CMD high 
                             ; (we do it many times but there is no harm in that)
-	out pins, 3	[4]			; Push out to pins (first pixel). First pixel is out 1 clock cycle after
+	out pins, 2	[3]			; Push out to pins (first pixel). First pixel is out 1 clock cycle after
                             ; DATAEM_CMD is high
-	out pins, 3	[2]			; Push out to pins (next pixel)
+	out pins, 2 [3]			; Push out to pins (next pixel)
+    out pins, 2 [3]			; Push out to pins (next pixel)
+    out pins, 2	[1]		; Push out to pins (next pixel)
 	jmp x-- pxlout		; Stay here thru horizontal active mode
 
 nop side 0  ; set DATAEM_CMD low again (TODO: see if this can be put one clock cycle sooner) 
@@ -50,10 +52,7 @@ static inline void pxl_program_init(PIO pio, uint sm, uint offset, uint pin, uin
     
     //assert(pin < validpin)  // we assume pin < validpin (otherwise you need to do some work in line below)
     //assert(validpin-pin > 7)  // excessive, but no harm in checking
-    // Set the pin direction to output at the PIO (1 sideset + 8 pins for pixel)
-    // for reasons not quite clear to me we need to explicity set the pins as output again.
-    // Since the pins are not contiguous we just increase the nubmer of pins
-    // with sideset pin=validpin and P0-P7 being pin:pin+7    
+    // Set the pin direction to output at the PIO (1 sideset + 8 pins for pixel) 
     pio_sm_set_consecutive_pindirs(pio, sm, pin, 8, true);
     pio_sm_set_consecutive_pindirs(pio, sm, validpin, 1, true); 
 
