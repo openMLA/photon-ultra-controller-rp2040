@@ -1,5 +1,4 @@
-> **warning**
->
+> **Warning**
 > The project is still under development, and is therefore not quite ready for independent replication. If want to use is asap, please get in touch so I can give pointers. Once the PCB has been assembled and minimal functional code is available a full guide will be written up.
 
 # Photon Ultra DLP controller
