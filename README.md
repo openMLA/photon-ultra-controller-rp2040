@@ -24,7 +24,7 @@ The PCB uses a Raspberry Pi Pico board as the central controller. The PIO blocks
 
 ### Code
 
-The PIO implementation was heavily inspired by the nice [writeup by Hunter Adams](https://vanhunteradams.com/Pico/VGA/VGA.html#Code-organization).
+The PIO implementation is a modified version of the nice [writeup by Hunter Adams](https://vanhunteradams.com/Pico/VGA/VGA.html#Code-organization).
 
 ### Context
 
