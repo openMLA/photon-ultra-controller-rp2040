@@ -25,7 +25,11 @@ pico_generate_pio_header(DLP_pico ${CMAKE_CURRENT_LIST_DIR}/pxl_clk.pio)
 target_sources(DLP_pico PRIVATE DLP_pico.c)
 
 # must match with executable name
-target_link_libraries(DLP_pico PRIVATE pico_stdlib hardware_pio hardware_dma)
+target_link_libraries(DLP_pico PRIVATE pico_stdlib hardware_pio hardware_dma hardware_i2c)
 
 # must match with executable name
 pico_add_extra_outputs(DLP_pico)
+
+# serial over USB please
+pico_enable_stdio_usb(DLP_pico 1)
+pico_enable_stdio_uart(DLP_pico 0)

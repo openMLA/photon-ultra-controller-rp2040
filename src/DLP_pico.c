@@ -19,15 +19,211 @@
  *
  */
 #include <stdio.h>
+#include <assert.h>
 #include "pico/stdlib.h"
 #include "hardware/pio.h"
 #include "hardware/dma.h"
+#include "hardware/i2c.h"
+#include "hardware/gpio.h"
+
 // Our assembled programs:
 // Each gets the name <pio_filename.pio.h>
 #include "hsync.pio.h"
 #include "vsync.pio.h"
 #include "pxl.pio.h"
 #include "pxl_clk.pio.h"
+
+const int PROJ_ON_GPIO = 20;  // physical pin nr 26
+const int HOST_IRQ_GPIO = 21;  // physical pin nr 27  
+
+const uint LED_PIN_G = 26;  // GPIO 26
+const uint SDA_PIN = 6; // GPIO 6
+const uint SCL_PIN = 7; // GPIO 7
+
+static uint16_t exposure_time = 200;
+
+
+
+
+//////// i2c config (max freq 100 kHz)
+
+// we define the i2c address of the DLPC1438. For whatever reason (I guess conflict with other
+// i2c devices on the mainboard) eViewTek have changed the i2c address to 0x1B, from the 
+// factory setting of 36h. I assume this will be the same for all boards. 
+const int DLPC_addr = 0x1B;  
+
+// 3D print mode. For operating mode select (0x05). See section 3.1.1.1 of DLPC1438 prog.manual.
+const int EXTERNAL_PRINT_MODE = 0x06;  
+
+void initialise_DLPC() {
+    // first thing we must set PROJ_ON high
+    printf("Setting PROJ_ON high...");
+    gpio_init(PROJ_ON_GPIO);
+    gpio_set_dir(PROJ_ON_GPIO, GPIO_OUT);
+    gpio_put(PROJ_ON_GPIO, 1);  // this will let the DLPC1438 know we want to go, go go
+
+    // now we must let the DLPC1438 run through its initialisation cycle
+    // it will let us know it is done by pulling HOST_IRQ low
+
+    printf("Waiting for HOST_IRQ low...");
+
+    // blanket timeout to wait for HOST_IRQ to go high (depends on how quickly the power rails
+    // of the DLPC1438 go high etc.) We want to check when the line goes low, but only once its
+    // been high
+    //sleep_ms(250);
+
+    gpio_init(HOST_IRQ_GPIO);
+    gpio_set_dir(HOST_IRQ_GPIO, GPIO_IN);
+    bool last_IRQ_state = 0;
+    bool current_IRQ_state = 0;
+    bool transition = 0;
+    while (!transition) {
+        sleep_ms(25);
+        current_IRQ_state = gpio_get(HOST_IRQ_GPIO);  
+        printf("HOST IRQ IS: %d\n", current_IRQ_state);
+        if ((last_IRQ_state == 1) && (current_IRQ_state == 0)) { transition = 1; }
+        last_IRQ_state = current_IRQ_state;
+    }
+
+    printf("HOST_IRQ has been pulled low by DLPC1438, it is ready for communication!");
+
+    // now that HOST_IRQ is low we can start i2c communication. Lets give it 100ms to be safe
+    sleep_ms(100);
+}
+
+void configure_i2c() {
+    printf("setting up i2c...\n");
+    i2c_init(i2c1, 38 * 1000);  // DLPC1438 supports up to 100KHz; we use i2c HW block 0
+    gpio_set_function(SDA_PIN, GPIO_FUNC_I2C);
+    gpio_set_function(SCL_PIN, GPIO_FUNC_I2C); 
+    gpio_pull_up(SDA_PIN);  // prob not needed since we have external pullup
+    gpio_pull_up(SCL_PIN);  // prob not needed since we have external pullup
+    printf("i2c should be ready!\n");
+}
+
+/// TEMPORARY TODO: remove
+bool reserved_addr(uint8_t addr) {
+    return (addr & 0x78) == 0 || (addr & 0x78) == 0x78;
+}
+
+void configure_test_pattern_settings(uint8_t pattern_idx) {
+    uint8_t old_settings[6];
+    i2c_write_blocking(i2c1, DLPC_addr, 0x0C, 1, true); 
+    i2c_read_blocking(i2c1, DLPC_addr, old_settings, 6, false);
+    printf("old test pattern settings: ");
+    for (int i = 0; i < sizeof old_settings / sizeof old_settings[0]; i++) {
+        printf("%x ", old_settings[i]);
+    }
+
+
+    switch(pattern_idx){
+        uint8_t test_pattern_settings[7] = {0x0B ,0x06, 0x00, 0x06, 0x06, 0x06, 0x06};
+        case 0:
+            // horizontal ramp from 0 to 255
+            // no need to change the pattern
+            i2c_write_blocking(i2c1, DLPC_addr, &test_pattern_settings, 7, false);
+
+            uint8_t new_settings[6];
+            i2c_write_blocking(i2c1, DLPC_addr, 0x0C, 1, true); 
+            i2c_read_blocking(i2c1, DLPC_addr, new_settings, 6, false);
+            printf("new test pattern settings: ");
+            for (int i = 0; i < sizeof new_settings / sizeof new_settings[0]; i++) {
+                printf("%x ", new_settings[i]);
+    }
+            break;
+        case 1:
+            // horizontal ramp from 0 to 255
+            i2c_write_blocking(i2c1, DLPC_addr, &test_pattern_settings, 7, false);
+            break;
+        case 2:
+            // horizontal ramp from 0 to 255
+            i2c_write_blocking(i2c1, DLPC_addr, &test_pattern_settings, 7, false);
+            break;
+        default:
+            printf("request pattern number not defined");
+    }    
+}
+
+void intialise_DLP_test_pattern() {
+    // do a basic check to see if we can find the DLPC1438 on the i2c lines
+    int ret;
+    uint8_t rxdata;
+    ret = i2c_read_blocking(i2c1, DLPC_addr, &rxdata, 1, false); 
+    printf(ret < 0 ? "Could not connect to DLPC1438 over i2c\n" : "Found DLPC1438 on i2c\n");
+
+    printf("querying current device mode....\n");   
+    uint8_t mode[1];
+    uint8_t modequery = 0x06;
+    i2c_write_blocking(i2c1, DLPC_addr, &modequery, 1, true); 
+    i2c_read_blocking(i2c1, DLPC_addr, mode, 1, false);
+    printf("DLPC1438 was in: mode %x (see DLPC1438 manual 3.1.2) at startup time.\n", mode[0]);
+
+    // first we must configure the test pattern mode BEFORE activating it
+
+    configure_test_pattern_settings(0);
+
+    // now we can switch to test pattern mode
+
+    printf("Attempting to enter test pattern mode....\n");
+    uint8_t modeset[] = {0x05, 0x01};  // 01 is test pattern mode, see 3.1.1 of the manual
+    i2c_write_blocking(i2c1, DLPC_addr, &modeset, 2, false); 
+    // check if switch was succesfull
+    uint8_t modenew[3];
+    i2c_write_blocking(i2c1, DLPC_addr, &modequery, 1, true); 
+    i2c_read_blocking(i2c1, DLPC_addr, mode, 1, false);
+
+    printf("We are NOW in mode: %x\n", mode[0]);
+    assert(*mode == 0x01); 
+    printf("survived assert");
+}
+
+void initialise_3D_print_mode_and_expose_frame(uint16_t exposure_time) {  // see section 3.3.1 of guide
+    // set external print config
+
+    // send image data to video buffer (via PIO)
+    // WAIT for SYSTEM_READY flag of DLPC1438 //  we dont seem to have a hardware pin for this; so maybe just wait a bit?
+        // "General purpose I/O 06 (hysteresis buffer). Reserved for System Ready signal (Output).
+        // Indicates when system is configured and ready for first print layer command after being 
+        //commanded to go into External Print Mode. Applicable to External Print Mode only"
+    // Set External Print Layer Control (starts exposure)
+}
+
+
+void expose_new_frame(uint16_t exposure_time) {
+    // send image data to video buffer (via PIO)
+    // Set External Print Layer Control (starts exposure)
+}
+
+void scan_i2c() {
+    printf("\nI2C Bus Scan\n");
+    printf("   0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F\n");
+
+    for (int addr = 0; addr < (1 << 7); ++addr) {
+        if (addr % 16 == 0) {
+            printf("%02x ", addr);
+        }
+
+        // Perform a 1-byte dummy read from the probe address. If a slave
+        // acknowledges this address, the function returns the number of bytes
+        // transferred. If the address byte is ignored, the function returns
+        // -1.
+
+        // Skip over any reserved addresses.
+        int ret;
+        uint8_t rxdata[3];
+        if (reserved_addr(addr))
+            ret = PICO_ERROR_GENERIC;
+        else
+            ret = i2c_read_blocking(i2c1, addr, &rxdata, 1, false);
+
+        printf(ret < 0 ? "." : "@");
+        printf(addr % 16 == 15 ? "\n" : "  ");
+    }
+    printf("Done.\n");
+}
+
+
+//////// PIO stuff
 
 
 // VGA timing constants
@@ -85,6 +281,27 @@ int main() {
 
     // Initialize stdio
     stdio_init_all();
+
+    gpio_init(LED_PIN_G);
+    gpio_set_dir(LED_PIN_G, GPIO_OUT);
+    for (int i = 0; i < 5; i++) {
+        printf("Blinking!\r\n");
+        gpio_put(LED_PIN_G, 0);
+        sleep_ms(250);
+        gpio_put(LED_PIN_G, 1);
+        sleep_ms(1000);
+    }
+    
+    initialise_DLPC();
+
+    configure_i2c();
+
+    //while(1) {
+        scan_i2c();
+        sleep_ms(500);
+    //}
+
+    intialise_DLP_test_pattern();
 
     // Choose which PIO instance to use (there are two instances, each with 4 state machines)
     PIO pio = pio0;
