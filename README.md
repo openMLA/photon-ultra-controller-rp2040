@@ -34,7 +34,7 @@ Of course if you do not plan on using the DMD in the context of the photon ultra
 
 The code for this project is written in C, and unfortunately I am not a C programmer so it is very sloppy code. If you know of ways to make parts more elegant don't hesitate to make a pull request with changes.
 
-More important than the code is the approach taken to power up and control the photon board, and more specifically the DLPC1438. A walkthrough of steps and gotchas can be found in [the guidelines](guidelines.md). Most of it will also be mentioned in the code for the project, but having a separate document is more convenient.
+More important than the code is the approach taken to power up and control the photon board, and more specifically the DLPC1438. A walkthrough of steps and gotchas can be found in [the guidelines](Guidelines.md). Most of it will also be mentioned in the code for the project, but having a separate document is more convenient.
 
 The PIO implementation is a modified version of the nice [writeup by Hunter Adams](https://vanhunteradams.com/Pico/VGA/VGA.html#Code-organization).
 
