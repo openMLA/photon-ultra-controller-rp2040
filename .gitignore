@@ -5,6 +5,9 @@ src/build/*
 # affinity designer source files
 *.afdesign
 
+# python
+*.pyc
+
 # FreeCAD
 *.FCstd1
 

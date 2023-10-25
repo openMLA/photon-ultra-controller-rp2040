@@ -1,28 +1,10 @@
-## Running the DLP pico demo
+# DLP controller code
 
-To run the demo code on your pico, copy over the `build/DLP_pico.uf2` over to the pico.
+This code is developed to be run on a Linux system, but could probably be adapted to run on a microcontroller for basic functionality. Still, the recommended device is a Raspberry Pi zero 2, as that is the device used for development.
 
-### Building the demo code
+### High level overview
 
-I don't know a thing about compiling C stuff but given that this code is based on the nice [example code by Hunter Adams](https://vanhunteradams.com/Pico/VGA/VGA.html) most of the cmake stuff is already set up. To be able to build the project you may need to install the pico sdk. You can read more about this [in the official getting started guide](https://datasheets.raspberrypi.com/pico/getting-started-with-pico.pdf).
+To talk to the eViewTek board that in turn talks to the DLP301s micromirror unit, we need to 
 
-To build the project, head into the `build` directory and run
-
-```
-cmake .. -DPICO_BOARD=pico_w
-```
-
-and follow that up with 
-
-```
-make
-```
-
-Which should finally create the file `DLP_pico.uf2` that you can then use to program the pico. The `DLP_pico.uf2` file is also included in the repository to avoid having to go through the build process itself if you don't need to modify anything.
-
-### Tools
-
-I am not experienced enough with C to make a solid recommendation, but for the project I used Microsoft Visual Studio Code. With extensions:
-
-* cmake
-* serial monitor  (so we can get some information back from the pico)
+1. Configure the system for printing over I2C
+2. Send over image data over SPI
