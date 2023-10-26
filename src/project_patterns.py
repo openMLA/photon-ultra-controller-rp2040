@@ -1,4 +1,5 @@
 from smbus2 import SMBus, i2c_msg
+import spidev
 
 import errno
 from configure_controller import *
@@ -22,11 +23,19 @@ def set_test_line_pattern(address):
 
     turn_on_test_pattern_mode(address, bus)
 
+
+
 with SMBus(1) as bus:
     # try to write a dummy byte to the I2C address of the eViewTek board 
     # at address 27 (0x1d). It will give an error 
     DLPC1438_addr = 27
     check_i2c_listed(DLPC1438_addr, bus)
+
+    # with I2C working, we can run a check for I2C connectivity
+    spi = spidev.SpiDev()
+    spi.open(0, 0)  # we use chip select pin 0 (if usni CE1, use (0,1))
+    spi.max_speed_hz = 500000
+    spi.mode = 0    
 
     #turn_on_test_pattern_mode(DLPC1438_addr)
 
@@ -45,13 +54,15 @@ with SMBus(1) as bus:
 
     prepare_exposure_mode(DLPC1438_addr, bus)  # run the basic setup steps
 
-    send_image_buffer()  # send image data (a dark dummy frame) AND swap active buffers
+    send_image_buffer(spi)  # send image data (a dark dummy frame) 
 
-    # Set parallel buffer to "Read and send buffer
+    set_active_buffer_idx(DLPC1438_addr, bus, 1) # swap active buffer in  # TODO seems to be ignored
 
-    turn_on_external_print_mode(DLPC1438_addr, bus)
+    enable_video_interface(DLPC1438_addr, bus)  # Set parallel buffer to "Read and send buffer" (enable FPGA video interface)
 
-    sleep(1)  # TODO: handle more gracefully
+    turn_on_external_print_mode(DLPC1438_addr, bus)  # now we can switch to 'external print' mode
+
+    sleep(1)  # TODO: handle more gracefully (need to wait for signal)
 
     # Set External Print Layer Control with the needed dark and exposed frames
     # NOTE: this will actually expose the pattern!
@@ -62,9 +73,9 @@ with SMBus(1) as bus:
 
     ## expose #############
 
-    framenumbers = [1, 2]
+    # framenumbers = [1, 2]
 
-    for frame in framenumbers:
-        send_image_buffer()  # send image data (a dark dummy frame) AND swap active buffers 
-        expose_dark_and_light_frames(DLPC1438_addr, bus, 32,512)
-        # OPTIONAL: check CRC for errors
+    # for frame in framenumbers:
+    #     send_image_buffer()  # send image data (a dark dummy frame)  
+    #     expose_dark_and_light_frames(DLPC1438_addr, bus, 32,512)
+    #     # OPTIONAL: check CRC for errors

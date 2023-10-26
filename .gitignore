@@ -7,6 +7,8 @@ src/build/*
 
 # python
 *.pyc
+# files with Texas Instruments copyright
+*TI.py  
 
 # FreeCAD
 *.FCstd1
