@@ -55,44 +55,51 @@ const int DLPC_addr = 0x1B;
 // 3D print mode. For operating mode select (0x05). See section 3.1.1.1 of DLPC1438 prog.manual.
 const int EXTERNAL_PRINT_MODE = 0x06;  
 
-void initialise_DLPC() {
-    // first thing we must set PROJ_ON high
-    printf("Setting PROJ_ON high...");
+void initialise_DLPC() {  
     gpio_init(PROJ_ON_GPIO);
     gpio_set_dir(PROJ_ON_GPIO, GPIO_OUT);
+    gpio_init(HOST_IRQ_GPIO);
+    gpio_set_dir(HOST_IRQ_GPIO, GPIO_IN);
+    bool current_IRQ_state = 0;
+
+    printf(">> Attempting to initialise the DLPC1438...\n\n");
+
+    // HOST_IRQ will be pulled HIGH by the pullup on eViewTek board
+    // but in theory it could also be LOW at this time
+    current_IRQ_state = gpio_get(HOST_IRQ_GPIO);  
+    printf("HOST_IRQ at startup is: %d\n", current_IRQ_state);
+    
+
+    // to signal to the DLPC1438 that we want to start up, we must set PROJ_ON high
+    printf("Setting PROJ_ON (DLPC1436:GPIO8) HIGH...\n");
     gpio_put(PROJ_ON_GPIO, 1);  // this will let the DLPC1438 know we want to go, go go
 
     // now we must let the DLPC1438 run through its initialisation cycle
-    // it will let us know it is done by pulling HOST_IRQ low
+    // it will let us know it is done by pulling HOST_IRQ low (~500ms)
+    printf("Waiting for HOST_IRQ LOW...\n");
 
-    printf("Waiting for HOST_IRQ low...");
-
-    // blanket timeout to wait for HOST_IRQ to go high (depends on how quickly the power rails
-    // of the DLPC1438 go high etc.) We want to check when the line goes low, but only once its
-    // been high
-    //sleep_ms(250);
-
-    gpio_init(HOST_IRQ_GPIO);
-    gpio_set_dir(HOST_IRQ_GPIO, GPIO_IN);
     bool last_IRQ_state = 0;
-    bool current_IRQ_state = 0;
     bool transition = 0;
+    int count = 0;
+    int sleeptime = 50;  // in ms 
     while (!transition) {
-        sleep_ms(25);
+        sleep_ms(sleeptime);
         current_IRQ_state = gpio_get(HOST_IRQ_GPIO);  
-        printf("HOST IRQ IS: %d\n", current_IRQ_state);
+        //printf("HOST IRQ IS: %d\n", current_IRQ_state);
         if ((last_IRQ_state == 1) && (current_IRQ_state == 0)) { transition = 1; }
         last_IRQ_state = current_IRQ_state;
+        count += 1;
     }
 
-    printf("HOST_IRQ has been pulled low by DLPC1438, it is ready for communication!");
-
+    printf("HOST_IRQ has been pulled low by DLPC1438, %dms after PROJ_ON signal\n", count*sleeptime);
+    
     // now that HOST_IRQ is low we can start i2c communication. Lets give it 100ms to be safe
     sleep_ms(100);
+    printf("DLPC1438 is ready for I2C communication!");
 }
 
 void configure_i2c() {
-    printf("setting up i2c...\n");
+    printf("\n>> setting up I2C...\n\n");
     i2c_init(i2c1, 38 * 1000);  // DLPC1438 supports up to 100KHz; we use i2c HW block 0
     gpio_set_function(SDA_PIN, GPIO_FUNC_I2C);
     gpio_set_function(SCL_PIN, GPIO_FUNC_I2C); 
