@@ -108,6 +108,58 @@ void configure_i2c() {
     printf("i2c should be ready!\n");
 }
 
+void check_register(int addr, int length, char* message) {
+    uint8_t data_in[length];
+    i2c_write_blocking(i2c1, DLPC_addr, &addr, 1, true); 
+    i2c_read_blocking(i2c1, DLPC_addr, data_in, length, false);
+    printf(message);
+    for (int i = 0; i < sizeof data_in / sizeof data_in[0]; i++) {
+        printf("%x \n", data_in[i]);
+    }
+}
+
+configure_external_print(){  // see section 3.3.6 (and 3.3.1) of programming guide
+    // in this step we set both the transfer fuction gamma and select which LED to use
+    printf("\n>> Configuring External Print mode...\n\n");
+
+    // temporary: checking initial state:
+    check_register(0xA9, 2, "intial gamma/led config settings: \n");
+    // the initial value is a bit strange; gamma sometimes appears as 0xFF sometimes as 0x00
+    // but LED seems fairly consistently just 1? 
+
+    // write the new values to register (actually configure the DLPC1438)
+    int gamma = 0;
+    int led_select = 0b00000001;  // b(7:2) are reserved. Only one bit can be nonzero. 
+    uint8_t write_data[3] = {0xA8, gamma, led_select};  // we write to register 0xA8
+    i2c_write_blocking(i2c1, DLPC_addr, &write_data, 3, false);
+
+    // temporary: checking results:
+    check_register(0xA9, 2, "new gamma/led config settings: \n");
+}
+
+void activate_external_print_mode() {  // switch DLPC1438 mode to EXTERNAL PRINT mode
+    printf("\n>> Swithing MODE to EXTERNAL PRINT...\n\n");
+
+    // temporary: checking initial state:
+    check_register(0x06, 1, "Mode before switching: ");
+
+    int mode = 0x06;  // EXTERNAL PRINT
+    int addr = 0x05;  
+    uint8_t write_data[] = {addr, mode};  
+    i2c_write_blocking(i2c1, DLPC_addr, &write_data, 2, false);
+
+    // temporary: check that we switched ok  --> works fine
+    check_register(0x06, 1, "Mode after switching: ");
+}
+
+void go_to_standby() {  // turns of illumination and keeps mirrors 50:50 refresh state
+    printf("\n>> Putting DLPC1438 in standby mode...\n");
+    int mode = 0xFF;
+    int addr = 0x05;
+    uint8_t write_data[] = {addr, mode};  // 01 is test pattern mode, see 3.1.1 of the manual
+    i2c_write_blocking(i2c1, DLPC_addr, &write_data, 2, false); 
+}
+
 /// TEMPORARY TODO: remove
 bool reserved_addr(uint8_t addr) {
     return (addr & 0x78) == 0 || (addr & 0x78) == 0x78;
@@ -136,7 +188,7 @@ void configure_test_pattern_settings(uint8_t pattern_idx) {
             printf("new test pattern settings: ");
             for (int i = 0; i < sizeof new_settings / sizeof new_settings[0]; i++) {
                 printf("%x ", new_settings[i]);
-    }
+            }
             break;
         case 1:
             // horizontal ramp from 0 to 255
@@ -184,22 +236,11 @@ void intialise_DLP_test_pattern() {
     printf("survived assert");
 }
 
-void initialise_3D_print_mode_and_expose_frame(uint16_t exposure_time) {  // see section 3.3.1 of guide
-    // set external print config
 
-    // send image data to video buffer (via PIO)
-    // WAIT for SYSTEM_READY flag of DLPC1438 //  we dont seem to have a hardware pin for this; so maybe just wait a bit?
-        // "General purpose I/O 06 (hysteresis buffer). Reserved for System Ready signal (Output).
-        // Indicates when system is configured and ready for first print layer command after being 
-        //commanded to go into External Print Mode. Applicable to External Print Mode only"
-    // Set External Print Layer Control (starts exposure)
-}
-
-
-void expose_new_frame(uint16_t exposure_time) {
-    // send image data to video buffer (via PIO)
-    // Set External Print Layer Control (starts exposure)
-}
+// void expose_new_frame(uint16_t exposure_time) {
+//     // send image data to video buffer (via PIO)
+//     // Set External Print Layer Control (starts exposure)
+// }
 
 void scan_i2c() {
     printf("\nI2C Bus Scan\n");
@@ -309,6 +350,23 @@ int main() {
     //}
 
     intialise_DLP_test_pattern();
+
+    sleep_ms(2000);  // just wait and check if test pattern appears
+
+    go_to_standby(); // stop illumination and be in long term stable mode
+
+    // TODO: implement section below
+    // programming guide section 3.3.1
+    configure_external_print();
+    // send video data
+    activate_external_print_mode(); // set to external print
+    // NOTE: wait for SYSTEM_READY?
+    // set Layer Control with the needed dark and exposed frames
+    // NOTE following is for repeated layers/exposures
+    // send video data
+    // set Layer Control with the needed dark and exposed frames -> go to line above
+
+
 
     // Choose which PIO instance to use (there are two instances, each with 4 state machines)
     PIO pio = pio0;
