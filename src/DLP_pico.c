@@ -98,9 +98,10 @@ void initialise_DLPC() {
     printf("DLPC1438 is ready for I2C communication!");
 }
 
+// set up i2c hardware on pico
 void configure_i2c() {
     printf("\n>> setting up I2C...\n\n");
-    i2c_init(i2c1, 38 * 1000);  // DLPC1438 supports up to 100KHz; we use i2c HW block 0
+    i2c_init(i2c1, 50 * 1000);  // DLPC1438 supports up to 100KHz; we use i2c HW block 0
     gpio_set_function(SDA_PIN, GPIO_FUNC_I2C);
     gpio_set_function(SCL_PIN, GPIO_FUNC_I2C); 
     gpio_pull_up(SDA_PIN);  // prob not needed since we have external pullup
@@ -108,22 +109,62 @@ void configure_i2c() {
     printf("i2c should be ready!\n");
 }
 
-void check_register(int addr, int length, char* message) {
-    uint8_t data_in[length];
-    i2c_write_blocking(i2c1, DLPC_addr, &addr, 1, true); 
-    i2c_read_blocking(i2c1, DLPC_addr, data_in, length, false);
+// can we actually see AND talk to DLPC1438 over i2c?
+void check_i2c_communication() {
+    // Can we see the DLPC1438?
+    scan_i2c();
+    sleep_ms(500);
+
+    // Can we talk to the DLPC1438?
+    int ret;
+    uint8_t rxdata;
+    ret = i2c_read_blocking(i2c1, DLPC_addr, &rxdata, 1, false); 
+    printf(ret < 0 ? "Could not connect to DLPC1438 over i2c\n" : "Found DLPC1438 on i2c\n");
+}
+
+void i2c_write(uint8_t addr, uint8_t data[], int length) {
+    // note that length is here the length of data (so excluding the addr)
+    uint8_t send_data[length+1];  // but we we must combine [addr, data...] to send over
+
+    send_data[0] = addr;
+
+    int i = 0;
+    for (i = 0; i < length; i++) {
+        send_data[i+1] = data[i];
+    }
+
+    printf("(i2c-send) raw data data: \n");
+    for (int i = 0; i < sizeof send_data / sizeof send_data[0]; i++) {
+        printf("%x ", send_data[i]);
+    }
+    printf("\n");
+
+    i2c_write_blocking(i2c1, DLPC_addr, send_data, length+1, false);
+}
+
+// read I2C data back
+// TODO: there is a strange issue where the first byte is a mystery byte
+// and it is not clear to me atm why this is returned, or what it represents.
+// for now I just ask for data at length+1 and print  only data[1:end]
+void i2c_read(int addr, int length, char* message) {
+    uint8_t data_in[length+1];
+
+    i2c_write_blocking(i2c1, DLPC_addr, addr, 1, true);
+
+    i2c_read_blocking(i2c1, DLPC_addr, data_in, length+1, false);
+
     printf(message);
-    for (int i = 0; i < sizeof data_in / sizeof data_in[0]; i++) {
-        printf("%x \n", data_in[i]);
+    for (int i = 0; i < length; i++) {
+        printf("%x \n", data_in[i+1]);
     }
 }
 
-configure_external_print(){  // see section 3.3.6 (and 3.3.1) of programming guide
+void configure_external_print(){  // see section 3.3.6 (and 3.3.1) of programming guide
     // in this step we set both the transfer fuction gamma and select which LED to use
     printf("\n>> Configuring External Print mode...\n\n");
 
     // temporary: checking initial state:
-    check_register(0xA9, 2, "intial gamma/led config settings: \n");
+    i2c_read(0xA9, 2, "intial gamma/led config settings: \n");
     // the initial value is a bit strange; gamma sometimes appears as 0xFF sometimes as 0x00
     // but LED seems fairly consistently just 1? 
 
@@ -134,14 +175,14 @@ configure_external_print(){  // see section 3.3.6 (and 3.3.1) of programming gui
     i2c_write_blocking(i2c1, DLPC_addr, &write_data, 3, false);
 
     // temporary: checking results:
-    check_register(0xA9, 2, "new gamma/led config settings: \n");
+    i2c_read(0xA9, 2, "new gamma/led config settings: \n");
 }
 
 void activate_external_print_mode() {  // switch DLPC1438 mode to EXTERNAL PRINT mode
     printf("\n>> Swithing MODE to EXTERNAL PRINT...\n\n");
 
     // temporary: checking initial state:
-    check_register(0x06, 1, "Mode before switching: ");
+    i2c_read(0x06, 1, "Mode before switching: ");
 
     int mode = 0x06;  // EXTERNAL PRINT
     int addr = 0x05;  
@@ -149,15 +190,40 @@ void activate_external_print_mode() {  // switch DLPC1438 mode to EXTERNAL PRINT
     i2c_write_blocking(i2c1, DLPC_addr, &write_data, 2, false);
 
     // temporary: check that we switched ok  --> works fine
-    check_register(0x06, 1, "Mode after switching: ");
+    i2c_read(0x06, 1, "Mode after switching: ");
 }
 
 void go_to_standby() {  // turns of illumination and keeps mirrors 50:50 refresh state
     printf("\n>> Putting DLPC1438 in standby mode...\n");
-    int mode = 0xFF;
-    int addr = 0x05;
-    uint8_t write_data[] = {addr, mode};  // 01 is test pattern mode, see 3.1.1 of the manual
-    i2c_write_blocking(i2c1, DLPC_addr, &write_data, 2, false); 
+    uint8_t mode_byte[] = {0xFF};
+    i2c_write(0x05, mode_byte, 1);
+}
+
+// programming guide section 3.3.8 & 9
+void expose_frames(unsigned short num_frames) { 
+    printf("\n>> Exposing %d frames!\n\n", num_frames);
+    printf("that is: %d frames\n\n", num_frames & 0xFF);
+
+    // temporary: checking initial state:
+    i2c_read(0xC2, 5, "Old Dark and Exposed frame settings: \n");
+
+    uint8_t print_control = 0b00000000;  // "External Print Control" byte; b(7:1) reserved
+    uint8_t dark_frames_LSB = 4; // TODO: just putting a dummy number in for now
+    uint8_t dark_frames_MSB = 9; // TODO: just putting a dummy number in for now
+    uint8_t exp_frames_LSB = (num_frames & 0xFF);  // get the LSB from num_frames
+    uint8_t exp_frames_MSB = 0xFF; 
+    uint8_t addr = 0xC1;   
+    uint8_t write_data_new[] = {print_control, dark_frames_LSB,
+     dark_frames_MSB, exp_frames_LSB, exp_frames_MSB};  
+    // uint8_t rev_write_data[] = {addr, exp_frames_MSB, exp_frames_LSB, dark_frames_MSB,
+    //  dark_frames_LSB, print_control};  
+    i2c_write(addr, write_data_new, 5);
+    //i2c_write_blocking(i2c1, DLPC_addr, write_data, 6, false);
+    
+
+    sleep_ms(200);
+    // temporary: checking if registers were written correctly:
+    i2c_read(0xC2, 5, "New Dark and Exposed frame settings: \n");
 }
 
 /// TEMPORARY TODO: remove
@@ -166,29 +232,18 @@ bool reserved_addr(uint8_t addr) {
 }
 
 void configure_test_pattern_settings(uint8_t pattern_idx) {
-    uint8_t old_settings[6];
-    i2c_write_blocking(i2c1, DLPC_addr, 0x0C, 1, true); 
-    i2c_read_blocking(i2c1, DLPC_addr, old_settings, 6, false);
-    printf("old test pattern settings: ");
-    for (int i = 0; i < sizeof old_settings / sizeof old_settings[0]; i++) {
-        printf("%x ", old_settings[i]);
-    }
 
+    i2c_read(0x0C, 6, "old test pattern settings: \n");
 
     switch(pattern_idx){
-        uint8_t test_pattern_settings[7] = {0x0B ,0x06, 0x00, 0x06, 0x06, 0x06, 0x06};
+        uint8_t test_pattern_settings[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
         case 0:
             // horizontal ramp from 0 to 255
             // no need to change the pattern
-            i2c_write_blocking(i2c1, DLPC_addr, &test_pattern_settings, 7, false);
+            i2c_write(0x0B, test_pattern_settings, 6);
+            //i2c_write_blocking(i2c1, DLPC_addr, &test_pattern_settings, 7, false);
+            i2c_read(0x0C, 6, "new test pattern settings: \n");
 
-            uint8_t new_settings[6];
-            i2c_write_blocking(i2c1, DLPC_addr, 0x0C, 1, true); 
-            i2c_read_blocking(i2c1, DLPC_addr, new_settings, 6, false);
-            printf("new test pattern settings: ");
-            for (int i = 0; i < sizeof new_settings / sizeof new_settings[0]; i++) {
-                printf("%x ", new_settings[i]);
-            }
             break;
         case 1:
             // horizontal ramp from 0 to 255
@@ -204,18 +259,13 @@ void configure_test_pattern_settings(uint8_t pattern_idx) {
 }
 
 void intialise_DLP_test_pattern() {
-    // do a basic check to see if we can find the DLPC1438 on the i2c lines
-    int ret;
-    uint8_t rxdata;
-    ret = i2c_read_blocking(i2c1, DLPC_addr, &rxdata, 1, false); 
-    printf(ret < 0 ? "Could not connect to DLPC1438 over i2c\n" : "Found DLPC1438 on i2c\n");
-
     printf("querying current device mode....\n");   
     uint8_t mode[1];
     uint8_t modequery = 0x06;
-    i2c_write_blocking(i2c1, DLPC_addr, &modequery, 1, true); 
-    i2c_read_blocking(i2c1, DLPC_addr, mode, 1, false);
-    printf("DLPC1438 was in: mode %x (see DLPC1438 manual 3.1.2) at startup time.\n", mode[0]);
+    // i2c_write_blocking(i2c1, DLPC_addr, &modequery, 1, true); 
+    // i2c_read_blocking(i2c1, DLPC_addr, mode, 1, false);
+    // printf("DLPC1438 was in: mode %x (see DLPC1438 manual 3.1.2) at startup time.\n", mode[0]);
+    i2c_read(0x06, 1, "mode at startup: ");
 
     // first we must configure the test pattern mode BEFORE activating it
 
@@ -224,14 +274,16 @@ void intialise_DLP_test_pattern() {
     // now we can switch to test pattern mode
 
     printf("Attempting to enter test pattern mode....\n");
-    uint8_t modeset[] = {0x05, 0x01};  // 01 is test pattern mode, see 3.1.1 of the manual
-    i2c_write_blocking(i2c1, DLPC_addr, &modeset, 2, false); 
+    uint8_t mode_byte[] = {0x01};
+    i2c_write(0x05, mode_byte, 1);
+    
     // check if switch was succesfull
     uint8_t modenew[3];
     i2c_write_blocking(i2c1, DLPC_addr, &modequery, 1, true); 
     i2c_read_blocking(i2c1, DLPC_addr, mode, 1, false);
 
     printf("We are NOW in mode: %x\n", mode[0]);
+    i2c_read(0x06, 1, "assert-check: ");
     assert(*mode == 0x01); 
     printf("survived assert");
 }
@@ -344,10 +396,7 @@ int main() {
 
     configure_i2c();
 
-    //while(1) {
-        scan_i2c();
-        sleep_ms(500);
-    //}
+    check_i2c_communication();
 
     intialise_DLP_test_pattern();
 
@@ -355,18 +404,23 @@ int main() {
 
     go_to_standby(); // stop illumination and be in long term stable mode
 
-    // TODO: implement section below
+    ///////// EXTERNAL PRINT MODE SECTION
     // programming guide section 3.3.1
+
+    //// setup phase
     configure_external_print();
     // send video data
     activate_external_print_mode(); // set to external print
     // NOTE: wait for SYSTEM_READY?
-    // set Layer Control with the needed dark and exposed frames
-    // NOTE following is for repeated layers/exposures
+    expose_frames(0xFF);  // set Layer Control with the needed dark and exposed frames
+
+    //// repeat phase
     // send video data
     // set Layer Control with the needed dark and exposed frames -> go to line above
 
-
+    sleep_ms(3000);
+    go_to_standby(); // TODO: remove; just for DMD lifetime.
+    i2c_read(0x06, 1, "we actually in standby?: ");
 
     // Choose which PIO instance to use (there are two instances, each with 4 state machines)
     PIO pio = pio0;
