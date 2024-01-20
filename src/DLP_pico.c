@@ -226,6 +226,29 @@ void switch_projector_mode(enum ProjectorMode mode) {
     i2c_read(0x06, 1, "Mode after switching: ");
 }
 
+void curtain_flood_exposure(int duration, int count) {
+    // simple utility function that will do a flood exposure (all pixels on max)
+    // for a certain <duration> (in ms) and repeated a <count> number of times.
+    // useful for testing communication.
+
+    // note that projector cannot be in standby mode for this to work. Try Testpattern.
+
+    i2c_read(0x17, 1, "Base curtain settings: "); //TODO: remove
+    uint8_t curtain[1];
+
+    for (int i = 0; i < count; i++) {
+        // flood exposure ON
+        curtain[0] = 0b00001111;
+        i2c_write(0x16, curtain, 1);
+        sleep_ms(duration);
+        // flood exposure OFF
+        curtain[0] = 0b00000000;
+        sleep_ms(duration);
+        i2c_write(0x16, curtain, 1);
+        sleep_ms(500);
+    }
+}
+
 void configure_external_print(){  // see section 3.3.6 (and 3.3.1) of programming guide
     // in this step we set both the transfer fuction gamma and select which LED to use
     printf("\n>> Configuring External Print mode...\n\n");
@@ -235,12 +258,11 @@ void configure_external_print(){  // see section 3.3.6 (and 3.3.1) of programmin
 
 
     // write the new values to register (actually configure the DLPC1438)
-    int gamma = 0xC4;
-    int led_select = 0b00000001;  // b(7:2) are reserved. Only one bit can be nonzero. 
-    //uint8_t write_data[3] = {0xA8, gamma, led_select};  // we write to register 0xA8
-    uint8_t write_data_new[] = {gamma, led_select};  // we write to register 0xA8
-    //i2c_write_blocking(i2c1, DLPC_addr, write_data, 3, false);
-    i2c_write(0xA8, write_data_new, 2);
+    int gamma = 0x00;  // we want the linear kind
+    // Select which LED to use b(7:2) are reserved. The final 3 bits are toggles for LED 3,2,1 
+    int led_select = 0b00000001;  // we want to enable LED 1
+    uint8_t data[] = {gamma, led_select};  // we write to register 0xA8
+    i2c_write(0xA8, data, 2);
 
     // temporary: checking results:
     i2c_read(0xA9, 2, "new gamma/led config settings: \n");
@@ -254,20 +276,23 @@ void expose_frames(unsigned short num_frames) {
     // temporary: checking initial state:
     i2c_read(0xC2, 5, "Old Dark and Exposed frame settings: \n");
 
-    uint8_t print_control = 0b00000111;  // "External Print Control" byte; b(7:1) reserved
+    // writing 6 -> gives 7 0 0 0 0
+    // writing 7 -> gives 7 0 0 0 0
+    // writing 0 -> gives 3 4 9 0 0 (so byte 2 and 3 ok)
+    // writing 0 -> gives 2 0 0 0 0 
+    // "External Print Control" byte; b(7:1) reserved; 0 is START, 1 is STOP.
+    uint8_t print_control = 0b00000001;  
     uint8_t dark_frames_LSB = 4; // TODO: just putting a dummy number in for now
     uint8_t dark_frames_MSB = 9; // TODO: just putting a dummy number in for now
-    uint8_t exp_frames_LSB = (num_frames & 0xFF);  // get the LSB from num_frames
-    uint8_t exp_frames_MSB = 0x01; 
+    uint8_t exp_frames_LSB = 0x03;  // get the LSB from num_frames
+    uint8_t exp_frames_MSB = 0x06; 
+
     uint8_t addr = 0xC1;   
+
     uint8_t write_data_new[] = {print_control, dark_frames_LSB,
      dark_frames_MSB, exp_frames_LSB, exp_frames_MSB};  
-    // uint8_t rev_write_data[] = {addr, exp_frames_MSB, exp_frames_LSB, dark_frames_MSB,
-    //  dark_frames_LSB, print_control};  
     i2c_write(addr, write_data_new, 5);
-    //i2c_write_blocking(i2c1, DLPC_addr, write_data, 6, false);
     
-
     sleep_ms(200);
     // temporary: checking if registers were written correctly:
     i2c_read(0xC2, 5, "New Dark and Exposed frame settings: \n");
@@ -398,19 +423,23 @@ int main() {
 
     sleep_ms(2000);  // just wait and check if test pattern appears
 
+    curtain_flood_exposure(200, 3);  // flash at max brightness a few times (for testing)
+
     switch_projector_mode(STANDBY); // stop illumination and be in long term stable mode
 
-    ///////// EXTERNAL PRINT MODE SECTION
-    // programming guide section 3.3.1
 
-    //// setup phase
+    ///////// EXTERNAL PRINT MODE SECTION
+    // programming guide section 3.3.1 ("3D Print Procedure Without FPGA Front-End")
+
+    // -- setup phase
     configure_external_print(); 
     // send video data
     switch_projector_mode(EXTERNALPRINT);
-    // NOTE: wait for SYSTEM_READY?
+
+    sleep_ms(1000); // For now just wait 1s. Ideally: wait for SYSTEM_READY
     expose_frames(0xFF);  // set Layer Control with the needed dark and exposed frames
 
-    //// repeat phase
+    // -- repeat phase
     // send video data
     // set Layer Control with the needed dark and exposed frames -> go to line above
 
