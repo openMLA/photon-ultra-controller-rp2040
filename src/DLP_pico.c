@@ -135,7 +135,7 @@ void scan_i2c() {
         if (reserved_addr(addr))
             ret = PICO_ERROR_GENERIC;
         else
-            ret = i2c_read_blocking(i2c1, addr, &rxdata, 1, false);
+            ret = i2c_read_blocking(i2c1, addr, rxdata, 1, false);
 
         printf(ret < 0 ? "." : "@");
         printf(addr % 16 == 15 ? "\n" : "  ");
@@ -156,7 +156,7 @@ void check_i2c_communication() {
     printf(ret < 0 ? "Could not connect to DLPC1438 over i2c\n" : "Found DLPC1438 on i2c\n");
 }
 
-void i2c_write(uint8_t addr, uint8_t data[], int length) {
+void i2c_write(uint8_t addr, uint8_t *data, int length) {
     // note that length is here the length of data (so excluding the addr)
     uint8_t send_data[length+1];  // but we we must combine [addr, data...] to send over
 
@@ -184,12 +184,12 @@ void i2c_write(uint8_t addr, uint8_t data[], int length) {
 void i2c_read(uint8_t addr, uint8_t length, char* message) {
     uint8_t data_in[length+1];
 
-    i2c_write_blocking(i2c1, DLPC_addr, &addr, 1, true);  // compiler doesnt like this but I think this is correct; otherwise wrapping it in 1 element array is needed?
+    i2c_write_blocking(i2c1, DLPC_addr, &addr, 1, true);
 
     i2c_read_blocking(i2c1, DLPC_addr, data_in, length+1, false);
 
     printf(message);
-    for (int i = 0; i < length+1; i++) {
+    for (int i = 0; i < length; i++) {
         printf("%x \n", data_in[i]);
     }
 }
@@ -200,19 +200,19 @@ void switch_projector_mode(enum ProjectorMode mode) {
     uint8_t mode_value;
     switch(mode) {
         case(0):
-            printf("> Switching to Test Pattern mode \n");
+            printf("> Switching to Test Pattern mode (0x01)\n");
             mode_value = 0x01;
             break;
         case(1):
-            printf("> Switching to Splash-Screen mode \n");
+            printf("> Switching to Splash-Screen mode (0x02)\n");
             mode_value = 0x02;    
             break;
         case(2):
-            printf("> Switching to External Print mode \n");
+            printf("> Switching to External Print mode (0x06)\n");
             mode_value = 0x06;
             break;
         case(3):
-            printf("> Switching to Standby mode \n");
+            printf("> Switching to Standby mode (0xFF)\n");
             mode_value = 0xFF;
             break;
     }
@@ -233,11 +233,10 @@ void configure_external_print(){  // see section 3.3.6 (and 3.3.1) of programmin
 
     // temporary: checking initial state:
     i2c_read(0xA9, 2, "intial gamma/led config settings: \n");
-    // the initial value is a bit strange; gamma sometimes appears as 0xFF sometimes as 0x00
-    // but LED seems fairly consistently just 1? 
+
 
     // write the new values to register (actually configure the DLPC1438)
-    int gamma = 0;
+    int gamma = 0xC4;
     int led_select = 0b00000001;  // b(7:2) are reserved. Only one bit can be nonzero. 
     //uint8_t write_data[3] = {0xA8, gamma, led_select};  // we write to register 0xA8
     uint8_t write_data_new[] = {gamma, led_select};  // we write to register 0xA8
