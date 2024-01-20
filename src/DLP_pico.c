@@ -56,9 +56,6 @@ enum ProjectorMode {
 // factory setting of 36h. I assume this will be the same for all boards. 
 const int DLPC_addr = 0x1B;  
 
-// 3D print mode. For operating mode select (0x05). See section 3.1.1.1 of DLPC1438 prog.manual.
-const int EXTERNAL_PRINT_MODE = 0x06;  
-
 void initialise_DLPC() {  
     gpio_init(PROJ_ON_GPIO);
     gpio_set_dir(PROJ_ON_GPIO, GPIO_OUT);
@@ -170,7 +167,7 @@ void i2c_write(uint8_t addr, uint8_t data[], int length) {
         send_data[i+1] = data[i];
     }
 
-    printf("(i2c-send) raw data data: ");
+    printf("(i2c-send) raw data: ");  // just for my sanity
 
     for (int i = 0; i < sizeof send_data / sizeof send_data[0]; i++) {
         printf("%x ", send_data[i]);
@@ -408,9 +405,9 @@ int main() {
     // programming guide section 3.3.1
 
     //// setup phase
-    configure_external_print();
+    configure_external_print(); 
     // send video data
-    switch_projector_mode(EXTERNAL_PRINT_MODE);
+    switch_projector_mode(EXTERNALPRINT);
     // NOTE: wait for SYSTEM_READY?
     expose_frames(0xFF);  // set Layer Control with the needed dark and exposed frames
 
