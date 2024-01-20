@@ -185,7 +185,6 @@ void i2c_read(uint8_t addr, uint8_t length, char* message) {
     uint8_t data_in[length+1];
 
     i2c_write_blocking(i2c1, DLPC_addr, &addr, 1, true);
-
     i2c_read_blocking(i2c1, DLPC_addr, data_in, length+1, false);
 
     printf(message);
@@ -277,37 +276,38 @@ void expose_frames(unsigned short num_frames) {
 void configure_test_pattern_settings(uint8_t pattern_idx) {
 
     i2c_read(0x0C, 6, "old test pattern settings: \n");
-    uint8_t test_pattern_settings[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
-    switch(pattern_idx){
-        
-        case 0:
-            // horizontal ramp from 0 to 255
-            // no need to change the pattern
-            i2c_write(0x0B, test_pattern_settings, 6);
-            //i2c_write_blocking(i2c1, DLPC_addr, &test_pattern_settings, 7, false);
-            i2c_read(0x0C, 6, "new test pattern settings: \n");
+    uint8_t pattern_select = 0b10000111;  // b(6:4) reserved
+    // parameters (effect depends on selected pattern)
+    // note that if a parameter is not used by pattern then the bytes will not be set
+    // and reading back the value after setting will yield 0x00
+    uint8_t param_1 = 0; 
+    uint8_t param_2 = 240;
+    uint8_t param_3 = 0;  
+    uint8_t param_4 = 240;
 
-            break;
-        case 1:
-            // horizontal ramp from 0 to 255
-            i2c_write_blocking(i2c1, DLPC_addr, test_pattern_settings, 7, false);
-            break;
-        case 2:
-            // horizontal ramp from 0 to 255
-            i2c_write_blocking(i2c1, DLPC_addr, test_pattern_settings, 7, false);
-            break;
-        default:
-            printf("request pattern number not defined");
-    }    
+    // TODO: decipher the meaning of byte 2; its not clear if it is actually reserved...
+    // will set to 0x00 for now.
+
+    uint8_t test_pattern_settings[6] = {pattern_select, 0x00, param_1, param_2, param_3, param_4};
+
+    i2c_write(0x0B, test_pattern_settings, 6);
+
+    i2c_read(0x0C, 6, "new test pattern settings: \n");
 }
 
 void intialise_DLP_test_pattern() {
+    // for some reason the intial pattern seems to be a checkerboard,
+    // but the i2c registers all read 0. Might be a special case...
+    switch_projector_mode(TESTPATTERN);
+    sleep_ms(200);
+
     // first we must configure the test pattern mode BEFORE activating it
     configure_test_pattern_settings(0);
 
     // now we can switch to test pattern mode
     printf(">>> MODE AT STARTUP\n");
+    sleep_ms(200);
 
     switch_projector_mode(TESTPATTERN);
 }
