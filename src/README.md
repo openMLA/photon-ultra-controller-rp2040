@@ -22,7 +22,10 @@ Which should finally create the file `DLP_pico.uf2` that you can then use to pro
 
 ### Tools
 
+In terms of hardware, I would suggest either using a [pico debug probe](https://www.raspberrypi.com/products/debug-probe/) to upload code, reset the pi and read the serial output, or a raspberry pi zero for the same application. You really don't want to have to unplug the board and press the reset button every time you want to try a new version of the code. Future versions of the board should make wiring SWD and UART readout easier.
+
 I am not experienced enough with C to make a solid recommendation, but for the project I used Microsoft Visual Studio Code. With extensions:
 
 * cmake
 * serial monitor  (so we can get some information back from the pico)
+
