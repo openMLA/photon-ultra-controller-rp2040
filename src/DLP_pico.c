@@ -49,6 +49,11 @@ enum ProjectorMode {
     STANDBY
 };
 
+enum LightState {
+    OFF,
+    ON
+};
+
 //////// i2c config (max freq 100 kHz)
 
 // we define the i2c address of the DLPC1438. For whatever reason (I guess conflict with other
@@ -258,44 +263,67 @@ void configure_external_print(){  // see section 3.3.6 (and 3.3.1) of programmin
 
 
     // write the new values to register (actually configure the DLPC1438)
-    int gamma = 0x00;  // we want the linear kind
-    // Select which LED to use b(7:2) are reserved. The final 3 bits are toggles for LED 3,2,1 
-    int led_select = 0b00000001;  // we want to enable LED 1
-    uint8_t data[] = {gamma, led_select};  // we write to register 0xA8
+    int gamma = 0x00;  // we want the linear kind (also used by Anycubic)
+    // Select which LED to use. b(7:2) are reserved. The final 3 bits are toggles for LED 3,2,1 
+    int led_select = 0b00000100;  // one LED at a time. Anyubic board says we need LED3.
+    uint8_t data[] = {gamma, led_select};  
     i2c_write(0xA8, data, 2);
 
-    // temporary: checking results:
     i2c_read(0xA9, 2, "new gamma/led config settings: \n");
 }
 
 // programming guide section 3.3.8 & 9
-void expose_frames(unsigned short num_frames) { 
-    printf("\n>> Exposing %d frames!\n\n", num_frames);
-    printf("that is: %d frames\n\n", num_frames & 0xFF);
+// exposure values taken from Anycubic Board's I2C commands during test patterns
+void switch_light_state(enum LightState light_on) { 
+    i2c_read(0xC2, 5, "Intial Dark and Exposed frame settings: \n");
 
-    // temporary: checking initial state:
-    i2c_read(0xC2, 5, "Old Dark and Exposed frame settings: \n");
+    uint8_t print_control, dark_frames_LSB, dark_frames_MSB, exp_frames_LSB, exp_frames_MSB;
 
-    // writing 6 -> gives 7 0 0 0 0
-    // writing 7 -> gives 7 0 0 0 0
-    // writing 0 -> gives 3 4 9 0 0 (so byte 2 and 3 ok)
-    // writing 0 -> gives 2 0 0 0 0 
-    // "External Print Control" byte; b(7:1) reserved; 0 is START, 1 is STOP.
-    uint8_t print_control = 0b00000001;  
-    uint8_t dark_frames_LSB = 4; // TODO: just putting a dummy number in for now
-    uint8_t dark_frames_MSB = 9; // TODO: just putting a dummy number in for now
-    uint8_t exp_frames_LSB = 0x03;  // get the LSB from num_frames
-    uint8_t exp_frames_MSB = 0x06; 
+    if (light_on) {
+        printf("[!UV!] Switching Projector Light ON\n");
+        // "External Print Control" byte; b(7:1) reserved; 0 is START, 1 is STOP.
+        print_control   = 0b00000000;  // 1 for light off, 0 for light on
+        dark_frames_LSB = 0x03; 
+        dark_frames_MSB = 0x00; 
+        exp_frames_LSB  = 0xFF;  // if both exp_frames are 0xFF the LED will stay on indefinitely
+        exp_frames_MSB  = 0xFF;  // and turning off is then done by sending this command with 
+                                        // print_control being 0b00000001 
+    } else {
+        printf("Switching Projector Light OFF\n");
+        print_control   = 0b00000001;  // 1 for light off, 0 for light on
+        dark_frames_LSB = 0x00; 
+        dark_frames_MSB = 0x00; 
+        exp_frames_LSB  = 0x00;  
+        exp_frames_MSB  = 0x00;  
+    }
 
-    uint8_t addr = 0xC1;   
-
-    uint8_t write_data_new[] = {print_control, dark_frames_LSB,
-     dark_frames_MSB, exp_frames_LSB, exp_frames_MSB};  
-    i2c_write(addr, write_data_new, 5);
-    
-    sleep_ms(200);
-    // temporary: checking if registers were written correctly:
+    uint8_t data[] = {print_control, dark_frames_LSB, dark_frames_MSB, exp_frames_LSB, exp_frames_MSB};  
+    i2c_write(0xC1, data, 5);
     i2c_read(0xC2, 5, "New Dark and Exposed frame settings: \n");
+}
+
+void set_illumination_PWM(unsigned short PWM_value) {
+    // Set the PWM for the LED source. Note that the resolution is only 10 bit (so 6 unused bits)
+    // We only consider LED 3 (byte 5,6) since that is the LED source we use
+
+    // The anycubic board uses 0xB4 (quite far from the max) during setup.
+
+    uint8_t LSByte = PWM_value & 0xFF;
+    uint8_t MSByte = (PWM_value >> 8) & 0xFF;
+
+    uint8_t data[] = {0, 0, 0, 0, LSByte, MSByte};
+    i2c_write(0x54, data, 6);
+    i2c_read(0x55, 6, "Set LED PWM settings: \n");
+}
+
+void set_image_orientation(bool flip_short_axis, bool flip_long_axis) {
+    uint8_t shifted_sa = (flip_short_axis << 2);
+    uint8_t shifted_la = (flip_long_axis << 1); 
+    uint8_t orientation_setting = (shifted_sa | shifted_la);
+    uint8_t data[1] = {orientation_setting};
+
+    i2c_write(0x14, data, 1);
+    i2c_read(0x15, 1, "Set image orientation settings: \n");
 }
 
 void configure_test_pattern_settings(uint8_t pattern_idx) {
@@ -398,6 +426,52 @@ void drawPixel(int x, int y, uint8_t brightness) {
     }
 }
 
+void checkerboard_PIO() {
+    // simple checkerboard-like pattenr with grayscale blocks. 
+    // due to memory constraints we only use 2 bits for each pixel
+
+    printf("{{ making checkerboard }}\n");
+
+    uint64_t begin_time; 
+    uint64_t curr_time; 
+    uint64_t frametime = 1000000;  // time between frame transitions (in us) 
+    uint32_t framenum = 0;
+
+    begin_time = time_us_64() ;
+
+    // grayscale block size
+    int xsize = 160;
+    int ysize = 80;
+    int xprog = 0;  // just a counter
+    int yprog = 0;  // just a counter
+ 
+    //while (true) {
+    for (int i = 0; i < 2; i++) { // send over a frame a few times. //TODO make less hacky
+        printf("Sending checker frame %d.\n", i);
+        int x = 0 ; 
+        int y = 0 ; 
+
+        for (x=0; x<320; x++) {    //<1280
+            //printf("... line x=%d.\n", x);
+            if (xprog == xsize) {
+                framenum = (framenum + 1) % 4;  // new grayscale value for block
+                xprog=0;
+            } 
+            xprog++;
+            for (y=0; y<720; y++) {         
+                if (yprog == ysize) {
+                    framenum = (framenum + 1) % 4;  // new grayscale value for block
+                    yprog=0;
+                } 
+                yprog++;
+                drawPixel(x, y, framenum) ;  // actually pack the pixel into DLP_data_array
+            }
+        }
+    }
+    printf("checkerboard done. \n");
+}
+
+
 int main() {
 
     // Initialize stdio
@@ -423,28 +497,14 @@ int main() {
 
     sleep_ms(2000);  // just wait and check if test pattern appears
 
-    curtain_flood_exposure(200, 3);  // flash at max brightness a few times (for testing)
+    curtain_flood_exposure(100, 3);  // flash at max brightness a few times (for testing)
 
     switch_projector_mode(STANDBY); // stop illumination and be in long term stable mode
 
 
-    ///////// EXTERNAL PRINT MODE SECTION
-    // programming guide section 3.3.1 ("3D Print Procedure Without FPGA Front-End")
-
-    // -- setup phase
-    configure_external_print(); 
-    // send video data
-    switch_projector_mode(EXTERNALPRINT);
-
-    sleep_ms(1000); // For now just wait 1s. Ideally: wait for SYSTEM_READY
-    expose_frames(0xFF);  // set Layer Control with the needed dark and exposed frames
-
-    // -- repeat phase
-    // send video data
-    // set Layer Control with the needed dark and exposed frames -> go to line above
-
-    sleep_ms(3000);
-    switch_projector_mode(STANDBY); // stop illumination and be in long term stable mode
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+    // ===========================-== PIO Stuff ====================================================
+    ////////////////////////////////////////////////////////////////////////////////////////////////
 
     // Choose which PIO instance to use (there are two instances, each with 4 state machines)
     PIO pio = pio0;
@@ -550,49 +610,34 @@ int main() {
     // ===================================== DEMO SCREENS =================================================
     /////////////////////////////////////////////////////////////////////////////////////////////////////
     
-    // simple checkerboard-like pattenr with grayscale blocks. 
-    // due to memory constraints we only use 2 bits for each pixel
 
-    uint64_t begin_time; 
-    uint64_t curr_time; 
-    uint64_t frametime = 1000000;  // time between frame transitions (in us) 
-    uint32_t framenum = 0;
-
-    begin_time = time_us_64() ;
-
-    // grayscale block size
-    int xsize = 160;
-    int ysize = 80;
-    int xprog = 0;  // just a counter
-    int yprog = 0;  // just a counter
+    ///////// EXTERNAL PRINT MODE SECTION
+    // programming guide section 3.3.1 ("3D Print Procedure Without FPGA Front-End")
 
 
-    while (true) {     
-        int x = 0 ; 
-        int y = 0 ; 
+    // -- setup phase -----------
+    printf("\n>> EXTERNAL PRINT SETUP <<\n\n");
+    configure_external_print(); 
+    //checkerboard_PIO(); // send video data
+    switch_projector_mode(EXTERNALPRINT); 
+    sleep_ms(200); // For now just wait a bit. Ideally: detect SYSTEM_READY (GPIO_06; not connected)
+    set_illumination_PWM(0xB4);
+    set_image_orientation(false, false);
 
-        for (x=0; x<1280; x++) {   
-            if (xprog == xsize) {
-                framenum = (framenum + 1) % 4;  // new grayscale value for block
-                xprog=0;
-            } 
-            xprog++;
-            for (y=0; y<720; y++) {         
-                if (yprog == ysize) {
-                    framenum = (framenum + 1) % 4;  // new grayscale value for block
-                    yprog=0;
-                } 
-                yprog++;
-                drawPixel(x, y, framenum) ;  // actually pack the pixel into DLP_data_array
-            }
-        }
+    switch_light_state(ON);   // turn on the projector and show whatever is in image buffer
 
-        // every frametime we shift the pattern by one grayscale value.
-        // possible demonstration of framerate or something
-        // curr_time = time_us_64();
-        // if  (curr_time - begin_time > frametime) {
-        //     framenum = (framenum+1) % 4; 
-        //     begin_time = curr_time;
-        // }
-    }
+    // -- loop phase ---------
+    printf("\n>> EXTERNAL PRINT LOOP <<\n\n");
+    checkerboard_PIO(); // send video data [A]
+    switch_light_state(ON);   // turn on the projector and show whatever is in image buffer
+    // -> go to line above loop back to [A]
+    
+
+    sleep_ms(1000);
+    switch_light_state(OFF);
+    sleep_ms(2000);
+    
+    switch_projector_mode(STANDBY); // stop illumination and be in long term stable mode
+    
+    printf("\ndone.");
 }
