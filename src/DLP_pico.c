@@ -37,6 +37,7 @@ const int PROJ_ON_GPIO = 20;  // physical pin nr 26
 const int HOST_IRQ_GPIO = 21;  // physical pin nr 27  
 
 const uint LED_PIN_G = 26;  // GPIO 26
+const uint LED_PIN_R = 22;  // GPIO 26
 const uint SDA_PIN = 6; // GPIO 6
 const uint SCL_PIN = 7; // GPIO 7
 
@@ -88,14 +89,21 @@ void initialise_DLPC() {
     bool transition = 0;
     int count = 0;
     int sleeptime = 50;  // in ms 
-    while (!transition) {
-        sleep_ms(sleeptime);
-        current_IRQ_state = gpio_get(HOST_IRQ_GPIO);  
-        //printf("HOST IRQ IS: %d\n", current_IRQ_state);
-        if ((last_IRQ_state == 1) && (current_IRQ_state == 0)) { transition = 1; }
-        last_IRQ_state = current_IRQ_state;
-        count += 1;
-    }
+
+    // TODO: the HOST_IRQ signal is 1.8V when high; hard to interpret on the pico; right
+    // on the threshold of detectable voltage. Code below assumes we can reliably distinguish
+    // between 0 and 1.8V. Alternative: wait for 1 s and assume it is ready.
+
+    // while (!transition) {
+    //     sleep_ms(sleeptime);
+    //     current_IRQ_state = gpio_get(HOST_IRQ_GPIO);  
+    //     //printf("HOST IRQ IS: %d\n", current_IRQ_state);
+    //     if ((last_IRQ_state == 1) && (current_IRQ_state == 0)) { transition = 1; }
+    //     last_IRQ_state = current_IRQ_state;
+    //     count += 1;
+    // }  // typically this takes ~650ms
+
+    sleep_ms(1000);  // makeshift solution if the HOST_IRQ based approach does not work.
 
     printf("HOST_IRQ has been pulled low by DLPC1438, %dms after PROJ_ON signal\n", count*sleeptime);
     
@@ -159,6 +167,9 @@ void check_i2c_communication() {
     uint8_t rxdata;
     ret = i2c_read_blocking(i2c1, DLPC_addr, &rxdata, 1, false); 
     printf(ret < 0 ? "Could not connect to DLPC1438 over i2c\n" : "Found DLPC1438 on i2c\n");
+    if (ret >= 0) { 
+        gpio_put(LED_PIN_R, 1);  // turn on LED so we know we are connected.
+    }
 }
 
 void i2c_write(uint8_t addr, uint8_t *data, int length) {
@@ -248,9 +259,8 @@ void curtain_flood_exposure(int duration, int count) {
         sleep_ms(duration);
         // flood exposure OFF
         curtain[0] = 0b00000000;
-        sleep_ms(duration);
         i2c_write(0x16, curtain, 1);
-        sleep_ms(500);
+        sleep_ms(duration);
     }
 }
 
@@ -260,7 +270,7 @@ void configure_external_print(){  // see section 3.3.6 (and 3.3.1) of programmin
 
     // temporary: checking initial state:
     i2c_read(0xA9, 2, "intial gamma/led config settings: \n");
-
+    sleep_ms(100);
 
     // write the new values to register (actually configure the DLPC1438)
     int gamma = 0x00;  // we want the linear kind (also used by Anycubic)
@@ -270,6 +280,7 @@ void configure_external_print(){  // see section 3.3.6 (and 3.3.1) of programmin
     i2c_write(0xA8, data, 2);
 
     i2c_read(0xA9, 2, "new gamma/led config settings: \n");
+    sleep_ms(100);
 }
 
 // programming guide section 3.3.8 & 9
@@ -299,6 +310,8 @@ void switch_light_state(enum LightState light_on) {
 
     uint8_t data[] = {print_control, dark_frames_LSB, dark_frames_MSB, exp_frames_LSB, exp_frames_MSB};  
     i2c_write(0xC1, data, 5);
+
+    sleep_ms(200);  // give it a little moment
     i2c_read(0xC2, 5, "New Dark and Exposed frame settings: \n");
 }
 
@@ -382,8 +395,8 @@ void intialise_DLP_test_pattern() {
 
 
 // Length of the pixel array, and number of DMA transfers
-#define TXCOUNT 230400 // Total number of chars/8bit numbers we need. (for DLP300/301 in normal mode)
-                       // We run 1280x720 pixels and 2 bits per pixel so we need 1280*720*(2/8) 
+#define TXCOUNT 115200 // Total number of chars/8bit numbers we need. (for DLP300/301 in normal mode)
+                       // We run 1280x720 pixels and 1 bit per pixel so we need 1280*720*(1/8) 
 
 // Pixel grayscale array that is DMA's to the PIO machines and
 // a pointer to the ADDRESS of this color array.
@@ -404,26 +417,57 @@ char * address_pointer = &DLP_data_array[0] ;
 // a DMA channel, we only need to modify the contents of the array and the
 // pixels will be automatically updated on the screen.
 
-// NOTE: for now we constrain brightness to be {0,1,2,3} (2 bits only)
-void drawPixel(int x, int y, uint8_t brightness) {
-    // Which array index is it?
-    int pixel = ((640 * y) + x) ;
+// NOTE: for now we constrain brightness to be 0 or 1 (1-bit)
+void drawPixel(int x, int y, enum LightState lit) {
+    
+    // we first find the linear index of the pixel. This is just a unique number for each 
+    // pixel that runs from 0 to x_range*y_range (1280*720)
+    long pixel_idx = ((1280 * y) + x) ;
 
-    switch (pixel % 4)
-    {
-        case 0:
-            DLP_data_array[pixel>>1] |= brightness << 6 ;
-            break;
-        case 1:
-            DLP_data_array[pixel>>1] |= brightness << 4;
-                break;
-        case 2:
-            DLP_data_array[pixel>>1] |= brightness << 2;
-                break;
-        default:
-            DLP_data_array[pixel>>1] |= brightness;
-                break;
-    }
+    // our data array contains fewer element than the range of our pixel index
+    // since we store the 1-bit info for 8 pixels in a single byte of that data array
+    // we need to to map our pixel index into array address. Note that 8 pixel indices should
+    // map to the same address.
+    
+    // so we do 2 things: first determine what pixel are we looking at (at our set of 8?)
+    // that one is not so hard: simply pixel_idx % 8.
+
+    // To efficiently find the array index, we can simply divide (and round) the pixel_index by 8. 
+    // A triple right bit shift should do the trick (pixel_idx >> 3)
+
+    // We then bit shift the pixel brightness (lit; 0 or 1) to the appropriate location in the byte
+    // by using lit << (7 - pixel_idx % 8). This means the lower pixel_index will be "to the left" in
+    // the byte.
+
+    DLP_data_array[pixel_idx>>3] |= lit << (7 - (pixel_idx % 8));
+
+    // switch (pixel_idx % 8)
+    // {
+    //     case 0:
+    //         DLP_data_array[pixel_idx>>3] |= lit << 7;
+    //         break;
+    //     case 1:
+    //         DLP_data_array[pixel_idx>>3] |= lit << 6;
+    //         break;
+    //     case 2:
+    //         DLP_data_array[pixel_idx>>3] |= lit << 5;
+    //         break;
+    //     case 3:
+    //         DLP_data_array[pixel_idx>>3] |= lit << 4;
+    //         break;
+    //     case 4:
+    //         DLP_data_array[pixel_idx>>3] |= lit << 3;
+    //         break;
+    //     case 5:
+    //         DLP_data_array[pixel_idx>>3] |= lit << 2;
+    //         break;
+    //     case 6:
+    //         DLP_data_array[pixel_idx>>3] |= lit << 1;
+    //         break;
+    //     default:
+    //         DLP_data_array[pixel_idx>>3] |= lit;
+    //         break;
+    // }
 }
 
 void checkerboard_PIO() {
@@ -445,13 +489,13 @@ void checkerboard_PIO() {
     int xprog = 0;  // just a counter
     int yprog = 0;  // just a counter
  
-    //while (true) {
-    for (int i = 0; i < 2; i++) { // send over a frame a few times. //TODO make less hacky
-        printf("Sending checker frame %d.\n", i);
+
+    while(true) {  //(time_us_64() - begin_time) < 5000000
+        
         int x = 0 ; 
         int y = 0 ; 
 
-        for (x=0; x<320; x++) {    //<1280
+        for (x=0; x<1280; x++) { 
             //printf("... line x=%d.\n", x);
             if (xprog == xsize) {
                 framenum = (framenum + 1) % 4;  // new grayscale value for block
@@ -464,11 +508,12 @@ void checkerboard_PIO() {
                     yprog=0;
                 } 
                 yprog++;
-                drawPixel(x, y, framenum) ;  // actually pack the pixel into DLP_data_array
+                drawPixel(x, y, ON) ;  // actually pack the pixel into DLP_data_array //TODO make dyanmic
             }
         }
     }
-    printf("checkerboard done. \n");
+
+    printf("Stopped sending checkerboard...\n");
 }
 
 
@@ -479,6 +524,8 @@ int main() {
 
     gpio_init(LED_PIN_G);
     gpio_set_dir(LED_PIN_G, GPIO_OUT);
+    gpio_init(LED_PIN_R);
+    gpio_set_dir(LED_PIN_R, GPIO_OUT);
     for (int i = 0; i < 5; i++) {
         printf("Blinking!\r\n");
         gpio_put(LED_PIN_G, 0);
@@ -500,6 +547,7 @@ int main() {
     curtain_flood_exposure(100, 3);  // flash at max brightness a few times (for testing)
 
     switch_projector_mode(STANDBY); // stop illumination and be in long term stable mode
+    sleep_ms(5000);  // TODO remove: for triggering scope
 
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -594,12 +642,12 @@ int main() {
 
 
     // Start the two pio machine IN SYNC
-    // Note that the RGB state machine is running at full speed,
+    // Note that the PXL state machine is running at full speed,
     // so synchronization doesn't matter for that one. But, we'll
     // start them all simultaneously anyway.
     pio_enable_sm_mask_in_sync(pio, ((1u << hsync_sm) | (1u << vsync_sm) | (1u << pxl_sm) | (1u << clk_sm)));
 
-    // Start DMA channel 0. Once started, the contents of the pixel color array
+    // Start DMA channel 0. Once started, the contents of the pixel data array
     // will be continously DMA's to the PIO machines that are driving the screen.
     // To change the contents of the screen, we need only change the contents
     // of that array.
@@ -607,18 +655,16 @@ int main() {
 
 
     /////////////////////////////////////////////////////////////////////////////////////////////////////
-    // ===================================== DEMO SCREENS =================================================
+    // ===================================== BACK TO CODE =================================================
     /////////////////////////////////////////////////////////////////////////////////////////////////////
     
 
     ///////// EXTERNAL PRINT MODE SECTION
     // programming guide section 3.3.1 ("3D Print Procedure Without FPGA Front-End")
 
-
     // -- setup phase -----------
     printf("\n>> EXTERNAL PRINT SETUP <<\n\n");
     configure_external_print(); 
-    //checkerboard_PIO(); // send video data
     switch_projector_mode(EXTERNALPRINT); 
     sleep_ms(200); // For now just wait a bit. Ideally: detect SYSTEM_READY (GPIO_06; not connected)
     set_illumination_PWM(0xB4);
@@ -629,6 +675,8 @@ int main() {
     // -- loop phase ---------
     printf("\n>> EXTERNAL PRINT LOOP <<\n\n");
     checkerboard_PIO(); // send video data [A]
+    // TODO: remove the sanity check below
+    printf("%x:%x:%x:%x", DLP_data_array[0], DLP_data_array[6000], DLP_data_array[100000], DLP_data_array[72]);
     switch_light_state(ON);   // turn on the projector and show whatever is in image buffer
     // -> go to line above loop back to [A]
     
