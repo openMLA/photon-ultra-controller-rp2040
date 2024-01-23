@@ -115,11 +115,12 @@ void initialise_DLPC() {
 // set up i2c hardware on pico
 void configure_i2c() {
     printf("\n>> setting up I2C...\n\n");
-    i2c_init(i2c1, 50 * 1000);  // DLPC1438 supports up to 100KHz; we use i2c HW block 0
+    
     gpio_set_function(SDA_PIN, GPIO_FUNC_I2C);
     gpio_set_function(SCL_PIN, GPIO_FUNC_I2C); 
-    gpio_pull_up(SDA_PIN);  // prob not needed since we have external pullup
-    gpio_pull_up(SCL_PIN);  // prob not needed since we have external pullup
+    //gpio_pull_up(SDA_PIN);  // Don't need these since we have hardware pullup on the PCB
+    //gpio_pull_up(SCL_PIN);  // Don't need these since we have hardware pullup on the PCB
+    i2c_init(i2c1, 40 * 1000);  // DLPC1438 supports up to 100KHz; we use i2c HW block 0
     printf("i2c should be ready!\n");
 }
 
@@ -286,8 +287,6 @@ void configure_external_print(){  // see section 3.3.6 (and 3.3.1) of programmin
 // programming guide section 3.3.8 & 9
 // exposure values taken from Anycubic Board's I2C commands during test patterns
 void switch_light_state(enum LightState light_on) { 
-    i2c_read(0xC2, 5, "Intial Dark and Exposed frame settings: \n");
-
     uint8_t print_control, dark_frames_LSB, dark_frames_MSB, exp_frames_LSB, exp_frames_MSB;
 
     if (light_on) {
@@ -308,11 +307,14 @@ void switch_light_state(enum LightState light_on) {
         exp_frames_MSB  = 0x00;  
     }
 
-    uint8_t data[] = {print_control, dark_frames_LSB, dark_frames_MSB, exp_frames_LSB, exp_frames_MSB};  
+    uint8_t data[] = {print_control, dark_frames_LSB, dark_frames_MSB, exp_frames_LSB, exp_frames_MSB}; 
+    sleep_ms(30);  // give it a little moment 
     i2c_write(0xC1, data, 5);
 
-    sleep_ms(200);  // give it a little moment
-    i2c_read(0xC2, 5, "New Dark and Exposed frame settings: \n");
+    // i2c_read the 0xC2 register never seems to actually return logical numbers
+    // I assume there is something wrong on the firmware side. The effect of the write command
+    // is okay though.
+    // i2c_read(0xC2, 5, "New Dark and Exposed frame settings: \n");
 }
 
 void set_illumination_PWM(unsigned short PWM_value) {
@@ -490,10 +492,12 @@ void checkerboard_PIO() {
     int yprog = 0;  // just a counter
  
 
-    while(true) {  //(time_us_64() - begin_time) < 5000000
+    while((time_us_64() - begin_time) < 5000000) {  
         
         int x = 0 ; 
         int y = 0 ; 
+        int yoink = 0;
+        int drawstate = 1;
 
         for (x=0; x<1280; x++) { 
             //printf("... line x=%d.\n", x);
@@ -508,7 +512,13 @@ void checkerboard_PIO() {
                     yprog=0;
                 } 
                 yprog++;
-                drawPixel(x, y, ON) ;  // actually pack the pixel into DLP_data_array //TODO make dyanmic
+                
+                drawPixel(x, y, drawstate) ;  // actually pack the pixel into DLP_data_array //TODO make dyanmic
+                if (yoink > 10) {
+                    yoink = 0;
+                    drawstate = drawstate ^ 1; // should flip 0->1 and 1->0
+                }
+                yoink++;
             }
         }
     }
@@ -518,37 +528,8 @@ void checkerboard_PIO() {
 
 
 int main() {
-
     // Initialize stdio
     stdio_init_all();
-
-    gpio_init(LED_PIN_G);
-    gpio_set_dir(LED_PIN_G, GPIO_OUT);
-    gpio_init(LED_PIN_R);
-    gpio_set_dir(LED_PIN_R, GPIO_OUT);
-    for (int i = 0; i < 5; i++) {
-        printf("Blinking!\r\n");
-        gpio_put(LED_PIN_G, 0);
-        sleep_ms(250);
-        gpio_put(LED_PIN_G, 1);
-        sleep_ms(1000);
-    }
-    
-    initialise_DLPC();
-
-    configure_i2c();
-
-    check_i2c_communication();
-
-    intialise_DLP_test_pattern();
-
-    sleep_ms(2000);  // just wait and check if test pattern appears
-
-    curtain_flood_exposure(100, 3);  // flash at max brightness a few times (for testing)
-
-    switch_projector_mode(STANDBY); // stop illumination and be in long term stable mode
-    sleep_ms(5000);  // TODO remove: for triggering scope
-
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
     // ===========================-== PIO Stuff ====================================================
@@ -654,36 +635,69 @@ int main() {
     dma_start_channel_mask((1u << pxl_chan_0)) ;
 
 
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
-    // ===================================== BACK TO CODE =================================================
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+    // ===================================== DLPC1438 stuff ========================================
+    ////////////////////////////////////////////////////////////////////////////////////////////////
     
+    gpio_init(LED_PIN_G);
+    gpio_set_dir(LED_PIN_G, GPIO_OUT);
+    gpio_init(LED_PIN_R);
+    gpio_set_dir(LED_PIN_R, GPIO_OUT);
+    for (int i = 0; i < 5; i++) {
+        printf("Blinking!\r\n");
+        gpio_put(LED_PIN_G, 0);
+        sleep_ms(250);
+        gpio_put(LED_PIN_G, 1);
+        sleep_ms(1000);
+    }
+    
+    // initialise_DLPC();
+
+    configure_i2c();  // set up i2c hardware
+    check_i2c_communication();  // check that we can talk to DLPC1438
+
+    // optional test commands
+    intialise_DLP_test_pattern();
+    sleep_ms(1000);  // just wait and check if test pattern appears
+    //curtain_flood_exposure(100, 3);  // flash at max brightness a few times (for testing)
+    switch_projector_mode(STANDBY); // stop illumination and be in long term stable mode
+    sleep_ms(800);
+
+    // prepare printer for external print mode
+
+    configure_external_print();
+    switch_projector_mode(EXTERNALPRINT);
+    set_illumination_PWM(0xB4);
+    set_image_orientation(false, false);
 
     ///////// EXTERNAL PRINT MODE SECTION
     // programming guide section 3.3.1 ("3D Print Procedure Without FPGA Front-End")
+
 
     // -- setup phase -----------
     printf("\n>> EXTERNAL PRINT SETUP <<\n\n");
     configure_external_print(); 
     switch_projector_mode(EXTERNALPRINT); 
     sleep_ms(200); // For now just wait a bit. Ideally: detect SYSTEM_READY (GPIO_06; not connected)
-    set_illumination_PWM(0xB4);
+    set_illumination_PWM(0xB4);  
     set_image_orientation(false, false);
 
+    printf("Checking light state...");
     switch_light_state(ON);   // turn on the projector and show whatever is in image buffer
+
 
     // -- loop phase ---------
     printf("\n>> EXTERNAL PRINT LOOP <<\n\n");
     checkerboard_PIO(); // send video data [A]
-    // TODO: remove the sanity check below
-    printf("%x:%x:%x:%x", DLP_data_array[0], DLP_data_array[6000], DLP_data_array[100000], DLP_data_array[72]);
-    switch_light_state(ON);   // turn on the projector and show whatever is in image buffer
-    // -> go to line above loop back to [A]
+    // // TODO: remove the sanity check below
+    printf("%x:%x:%x:%x:%x\n", DLP_data_array[0], DLP_data_array[12], DLP_data_array[6000], DLP_data_array[100000], DLP_data_array[72]);
+    // switch_light_state(ON);   // turn on the projector and show whatever is in image buffer
+    // // -> go to line above loop back to [A]
     
 
-    sleep_ms(1000);
+    sleep_ms(500); // TODO: remove
     switch_light_state(OFF);
-    sleep_ms(2000);
+    sleep_ms(1000);
     
     switch_projector_mode(STANDBY); // stop illumination and be in long term stable mode
     
