@@ -4,6 +4,7 @@ src/build/*
 !src/build/*.uf2
 # affinity designer source files
 *.afdesign
+utils/*.txt
 
 # FreeCAD
 *.FCstd1
