@@ -18,10 +18,9 @@ If you are interested in learning more about the Photon Ultra, you can find more
 
 ### 💡 UV Patterns
 
-```
 > [!NOTE]  
 > Due to RAM limitations (and my c programming skill limitations) the board can only display 2-bit images if you use the full resolution of the DMD. More RAM would solve this issue.
-```
+
 
 Below an example of the eViewTek board and optical engine controlled by the pico pio units, showing the OpenMLA project logo. Note that the pattern is 2-bit, so there are only 4 intensities (of which 1 is OFF).
 
