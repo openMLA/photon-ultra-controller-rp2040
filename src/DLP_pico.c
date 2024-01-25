@@ -393,9 +393,9 @@ void intialise_DLP_test_pattern() {
 
 
 // VGA timing constants
-#define H_ACTIVE 1295    // (active + frontporch - 1) - one cycle delay for mov //TODO Tune +27
-#define V_ACTIVE 719    // (active - 1) //TODO Tune  
-#define DATAEM_CMD_ACTIVE 319    // horizontal_pixels/pixels_per_byte = 1280/8 = 160
+#define H_ACTIVE 1295    // (active (1280) + frontporch - 1) - one cycle delay for mov //TODO Tune +27
+#define V_ACTIVE 719    // (active (720) - 1) //TODO Tune  
+#define DATAEM_CMD_ACTIVE 319    // (horizontal_pixels/pixels_per_byte - 1)
 
 
 // Length of the pixel array, and number of DMA transfers
@@ -690,7 +690,6 @@ int main() {
     printf("Checking light state...");
     switch_light_state(ON);   // turn on the projector and show whatever is in image buffer
 
-
     // -- loop phase ---------
     printf("\n>> EXTERNAL PRINT LOOP <<\n\n");
     //checkerboard_PIO(); // send video data [A]
@@ -699,8 +698,8 @@ int main() {
     // switch_light_state(ON);   // turn on the projector and show whatever is in image buffer
     // // -> go to line above loop back to [A]
     
-
     sleep_ms(15000); // TODO: remove
+
     switch_light_state(OFF);
     sleep_ms(1000);
     
