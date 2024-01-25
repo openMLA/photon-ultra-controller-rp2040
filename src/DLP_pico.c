@@ -26,6 +26,8 @@
 #include "hardware/i2c.h"
 #include "hardware/gpio.h"
 
+#include "test_image.h" // Include the header file
+
 // Our assembled programs:
 // Each gets the name <pio_filename.pio.h>
 #include "hsync.pio.h"
@@ -391,20 +393,21 @@ void intialise_DLP_test_pattern() {
 
 
 // VGA timing constants
-#define H_ACTIVE   1300    // (active + frontporch - 1) - one cycle delay for mov //TODO Tune
-#define V_ACTIVE   720    // (active - 1) //TODO Tune
-#define DATAEM_CMD_ACTIVE 320    // horizontal_pixels/pixels_per_byte = 1280/4 = 320
+#define H_ACTIVE 1295    // (active + frontporch - 1) - one cycle delay for mov //TODO Tune +27
+#define V_ACTIVE 719    // (active - 1) //TODO Tune  
+#define DATAEM_CMD_ACTIVE 319    // horizontal_pixels/pixels_per_byte = 1280/8 = 160
 
 
 // Length of the pixel array, and number of DMA transfers
-#define TXCOUNT 115200 // Total number of chars/8bit numbers we need. (for DLP300/301 in normal mode)
+#define TXCOUNT 230400 // Total number of chars/8bit numbers we need. (for DLP300/301 in normal mode)
                        // We run 1280x720 pixels and 1 bit per pixel so we need 1280*720*(1/8) 
 
-// Pixel grayscale array that is DMA's to the PIO machines and
-// a pointer to the ADDRESS of this color array.
-// Note that this array is automatically initialized to all 0's (black)
-unsigned char DLP_data_array[TXCOUNT];
+// // Pixel grayscale array that is DMA's to the PIO machines and
+// // a pointer to the ADDRESS of this color array.
+// // Note that this array is automatically initialized to all 0's (black)
+// unsigned char DLP_data_array[TXCOUNT];
 char * address_pointer = &DLP_data_array[0] ;
+
 
 // Give the I/O pins that we're using some names that make sense
 // the pins match the layout in the PCB and the pico board pinout
@@ -579,7 +582,7 @@ int main() {
 
     // Channel Zero (sends color data to PIO VGA machine)
     dma_channel_config c0 = dma_channel_get_default_config(pxl_chan_0);  // default configs
-    channel_config_set_transfer_data_size(&c0, DMA_SIZE_8);              // 8-bit txfers
+    channel_config_set_transfer_data_size(&c0, DMA_SIZE_8);              // 4-bit txfers
     channel_config_set_read_increment(&c0, true);                        // yes read incrementing
     channel_config_set_write_increment(&c0, false);                      // no write incrementing
     channel_config_set_dreq(&c0, DREQ_PIO0_TX2) ;                        // DREQ_PIO0_TX2 pacing (FIFO)
@@ -650,18 +653,20 @@ int main() {
         gpio_put(LED_PIN_G, 1);
         sleep_ms(1000);
     }
+
+      printf("%x:%x:%x:%x:%x\n", DLP_data_array[0], DLP_data_array[1], DLP_data_array[2], DLP_data_array[3], DLP_data_array[115100]); // TODO: REMOVE
     
-    // initialise_DLPC();
+    initialise_DLPC();
 
     configure_i2c();  // set up i2c hardware
     check_i2c_communication();  // check that we can talk to DLPC1438
 
     // optional test commands
     intialise_DLP_test_pattern();
-    sleep_ms(1000);  // just wait and check if test pattern appears
+    sleep_ms(500);  // just wait and check if test pattern appears
     //curtain_flood_exposure(100, 3);  // flash at max brightness a few times (for testing)
     switch_projector_mode(STANDBY); // stop illumination and be in long term stable mode
-    sleep_ms(800);
+    sleep_ms(300);
 
     // prepare printer for external print mode
 
@@ -688,14 +693,14 @@ int main() {
 
     // -- loop phase ---------
     printf("\n>> EXTERNAL PRINT LOOP <<\n\n");
-    checkerboard_PIO(); // send video data [A]
+    //checkerboard_PIO(); // send video data [A]
     // // TODO: remove the sanity check below
     printf("%x:%x:%x:%x:%x\n", DLP_data_array[0], DLP_data_array[12], DLP_data_array[6000], DLP_data_array[100000], DLP_data_array[72]);
     // switch_light_state(ON);   // turn on the projector and show whatever is in image buffer
     // // -> go to line above loop back to [A]
     
 
-    sleep_ms(500); // TODO: remove
+    sleep_ms(15000); // TODO: remove
     switch_light_state(OFF);
     sleep_ms(1000);
     

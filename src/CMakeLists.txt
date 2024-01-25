@@ -13,7 +13,7 @@ pico_sdk_init()
 #######
 
 # name anything you want
-add_executable(DLP_pico)
+add_executable(DLP_pico test_image.c)
 
 # must match with pio filename and executable name from above
 pico_generate_pio_header(DLP_pico ${CMAKE_CURRENT_LIST_DIR}/hsync.pio)
