@@ -1,5 +1,6 @@
-> **Important**
-> This project is functional, but there is still some polishing to do. Instructions are also barebones. Get in touch if you need help.
+
+> [!IMPORTANT]
+> This repository has been archived as the implementation turned out to have too many limitations regarding memory. It will work for 2-bit images, but the newer approach is all around more capable. The replacement approach uses the DPI of a raspberry pi, and can be found at [openMLA/photon-ultra-controller](https://github.com/openMLA/photon-ultra-controller)
 
 # Photon Ultra DLP controller
 
